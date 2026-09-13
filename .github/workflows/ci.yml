@@ -27,9 +27,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build and test macOS platform crate
         run: |
-          cargo clippy -p agentplay-platform --all-targets -- -D warnings
-          cargo test -p agentplay-platform
-          cargo build -p agentplay-platform --example macos_probe
+          cargo clippy -p agentplay-platform-macos --all-targets -- -D warnings
+          cargo test -p agentplay-platform-macos
+          cargo build -p agentplay-platform-macos --example macos_probe
       - name: Smoke-test real window capture and keyboard input
         shell: bash
         run: |

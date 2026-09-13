@@ -13,7 +13,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
-    use agentplay_platform::macos::{InputPolicy, MacOsBackend, list_windows};
+    use agentplay_platform_macos::{InputPolicy, MacOsBackend, list_windows};
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
@@ -59,16 +59,16 @@ fn exact_selector(
     window_id: &str,
     pid: &str,
     bundle: &str,
-) -> anyhow::Result<agentplay_platform::macos::WindowSelector> {
+) -> anyhow::Result<agentplay_platform_macos::WindowSelector> {
     let window_id: u32 = window_id.parse()?;
     let pid: i32 = pid.parse()?;
-    let matched = agentplay_platform::macos::list_windows()?
+    let matched = agentplay_platform_macos::list_windows()?
         .into_iter()
         .find(|window| {
             window.window_id == window_id && window.pid == pid && window.bundle_identifier == bundle
         })
         .ok_or_else(|| anyhow::anyhow!("exact target window was not found"))?;
-    Ok(agentplay_platform::macos::WindowSelector {
+    Ok(agentplay_platform_macos::WindowSelector {
         pid: Some(matched.pid),
         bundle_identifier: Some(matched.bundle_identifier),
         title_contains: matched.title,

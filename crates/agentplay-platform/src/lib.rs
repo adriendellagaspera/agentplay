@@ -7,6 +7,3 @@ pub trait CaptureBackend: Send {
 pub trait InputBackend: Send {
     fn press(&mut self, key: &Key) -> anyhow::Result<()>;
 }
-
-#[cfg(target_os = "macos")]
-pub mod macos;
