@@ -1,14 +1,8 @@
 use agentplay_core::{Agent, Environment, Observation};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RunLimits {
     pub max_steps: Option<u64>,
-}
-
-impl Default for RunLimits {
-    fn default() -> Self {
-        Self { max_steps: None }
-    }
 }
 
 pub struct Runner<E, A> {
