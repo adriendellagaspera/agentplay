@@ -1,5 +1,8 @@
+#[cfg(target_os = "macos")]
 use agentplay_core::Key;
+#[cfg(target_os = "macos")]
 use agentplay_platform::{CaptureBackend, InputBackend};
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
 #[cfg(not(target_os = "macos"))]
@@ -10,7 +13,7 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
-    use agentplay_platform::macos::{InputPolicy, MacOsBackend, WindowSelector, list_windows};
+    use agentplay_platform::macos::{InputPolicy, MacOsBackend, list_windows};
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
@@ -31,10 +34,7 @@ fn main() -> anyhow::Result<()> {
             let mut backend = MacOsBackend::attach(&selector, InputPolicy::capture_only())?;
             let frame = backend.capture()?;
             std::fs::write("frame.rgba", &frame.rgba)?;
-            println!(
-                "captured {}x{} RGBA frame to frame.rgba",
-                frame.width, frame.height
-            );
+            println!("captured {}x{} RGBA frame to frame.rgba", frame.width, frame.height);
         }
         [command, window_id, pid, bundle, key] if command == "press" => {
             let key = parse_key(key)?;
@@ -44,11 +44,9 @@ fn main() -> anyhow::Result<()> {
             backend.press(&key)?;
             println!("sent {key:?} to validated target");
         }
-        _ => {
-            anyhow::bail!(
-                "usage:\n  macos_probe list\n  macos_probe capture <window-id> <pid> <bundle-id>\n  macos_probe press <window-id> <pid> <bundle-id> <key>"
-            );
-        }
+        _ => anyhow::bail!(
+            "usage:\n  macos_probe list\n  macos_probe capture <window-id> <pid> <bundle-id>\n  macos_probe press <window-id> <pid> <bundle-id> <key>"
+        ),
     }
     Ok(())
 }
@@ -78,7 +76,7 @@ fn exact_selector(
 
 #[cfg(target_os = "macos")]
 fn parse_key(value: &str) -> anyhow::Result<Key> {
-    let key = match value.to_ascii_lowercase().as_str() {
+    Ok(match value.to_ascii_lowercase().as_str() {
         "up" => Key::Up,
         "down" => Key::Down,
         "left" => Key::Left,
@@ -87,6 +85,5 @@ fn parse_key(value: &str) -> anyhow::Result<Key> {
         "space" => Key::Space,
         value if value.chars().count() == 1 => Key::Character(value.chars().next().unwrap()),
         _ => anyhow::bail!("key must be a direction, enter, space, or one character"),
-    };
-    Ok(key)
+    })
 }
