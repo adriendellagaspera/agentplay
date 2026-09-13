@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
-    println!("cargo:rerun-if-changed=native/macos/bridge.swift");
+    println!("cargo:rerun-if-changed=native/bridge.swift");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
@@ -9,7 +9,7 @@ fn main() {
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let output = out_dir.join("agentplay-macos-bridge");
-    let source = PathBuf::from("native/macos/bridge.swift");
+    let source = PathBuf::from("native/bridge.swift");
 
     let status = Command::new("xcrun")
         .args(["swiftc", "-parse-as-library"])
