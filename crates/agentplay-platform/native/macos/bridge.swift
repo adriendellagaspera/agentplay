@@ -44,6 +44,11 @@ struct AgentPlayMacOSBridge {
     }
 
     static func run() async throws {
+        // ScreenCaptureKit's content filters require CoreGraphics Services to be
+        // initialized. CLI tools do not necessarily establish that connection
+        // implicitly, unlike normal AppKit applications.
+        _ = CGMainDisplayID()
+
         let args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
             throw BridgeError.usage("expected command: list | capture | press")
