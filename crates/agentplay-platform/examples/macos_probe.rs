@@ -34,7 +34,10 @@ fn main() -> anyhow::Result<()> {
             let mut backend = MacOsBackend::attach(&selector, InputPolicy::capture_only())?;
             let frame = backend.capture()?;
             std::fs::write("frame.rgba", &frame.rgba)?;
-            println!("captured {}x{} RGBA frame to frame.rgba", frame.width, frame.height);
+            println!(
+                "captured {}x{} RGBA frame to frame.rgba",
+                frame.width, frame.height
+            );
         }
         [command, window_id, pid, bundle, key] if command == "press" => {
             let key = parse_key(key)?;
@@ -62,9 +65,7 @@ fn exact_selector(
     let matched = agentplay_platform::macos::list_windows()?
         .into_iter()
         .find(|window| {
-            window.window_id == window_id
-                && window.pid == pid
-                && window.bundle_identifier == bundle
+            window.window_id == window_id && window.pid == pid && window.bundle_identifier == bundle
         })
         .ok_or_else(|| anyhow::anyhow!("exact target window was not found"))?;
     Ok(agentplay_platform::macos::WindowSelector {

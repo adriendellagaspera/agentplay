@@ -17,9 +17,7 @@ pub struct WindowSelector {
 impl WindowSelector {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.pid.is_some()
-                || self.bundle_identifier.is_some()
-                || self.title_contains.is_some(),
+            self.pid.is_some() || self.bundle_identifier.is_some() || self.title_contains.is_some(),
             "window selector must specify at least one constraint"
         );
         if let Some(bundle) = &self.bundle_identifier {
@@ -221,7 +219,9 @@ fn run_bridge<const N: usize>(args: [&str; N]) -> Result<Output> {
 fn decode_png(bytes: &[u8]) -> Result<Frame> {
     let mut decoder = Decoder::new(Cursor::new(bytes));
     decoder.set_transformations(Transformations::EXPAND | Transformations::STRIP_16);
-    let mut reader = decoder.read_info().context("reading screenshot PNG header")?;
+    let mut reader = decoder
+        .read_info()
+        .context("reading screenshot PNG header")?;
     let buffer_size = reader
         .output_buffer_size()
         .context("screenshot PNG output size is unknown")?;

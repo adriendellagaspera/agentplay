@@ -24,5 +24,8 @@ fn main() {
         .expect("xcrun must be available to build the macOS backend");
 
     assert!(status.success(), "failed to compile native macOS bridge");
-    println!("cargo:rustc-env=AGENTPLAY_MACOS_BRIDGE={}", output.display());
+    println!(
+        "cargo:rustc-env=AGENTPLAY_MACOS_BRIDGE={}",
+        output.display()
+    );
 }
