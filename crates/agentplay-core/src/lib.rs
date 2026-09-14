@@ -115,7 +115,7 @@ impl Default for QuiescencePolicy {
             sample_every_millis: 50,
             stable_for_millis: 200,
             max_wait_millis: 2_000,
-            difference_threshold: 500,
+            difference_threshold: 100,
         }
     }
 }
