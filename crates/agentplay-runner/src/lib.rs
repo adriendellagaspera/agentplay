@@ -1,5 +1,7 @@
 pub mod quiescence;
 
+pub mod quiescence;
+
 use agentplay_core::{Agent, Environment, Observation};
 
 #[derive(Clone, Debug, Default)]
