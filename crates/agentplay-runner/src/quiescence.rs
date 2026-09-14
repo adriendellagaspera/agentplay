@@ -114,10 +114,11 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
             policy.max_cycle_frames > 0,
             "maximum cycle length must be greater than zero"
         );
+        let max_cycle_frames = policy.max_cycle_frames;
         Ok(Self {
             policy,
             metric,
-            recent: std::collections::VecDeque::with_capacity(policy.max_cycle_frames),
+            recent: std::collections::VecDeque::with_capacity(max_cycle_frames),
             stable_since_millis: None,
             samples: 0,
             last_difference: None,
