@@ -344,14 +344,32 @@ mod tests {
     }
 
     #[test]
-    fn local_idle_animation_is_below_threshold() {
-        let a = frame();
-        let mut b = a.clone();
-        fill_block(&mut b, 0, 0, 255);
+    fn idle_phases_may_differ_above_threshold_and_still_settle_by_recurrence() {
+        let phases = three_phase_state(2);
+        let adjacent_score = BlockDifferenceMetric::default()
+            .difference(&phases[0], &phases[1])
+            .unwrap();
+        assert!(adjacent_score > policy().difference_threshold);
 
-        let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
+        let mut detector =
+            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
+        let mut result = Detection::Waiting;
+        for (sample, elapsed) in (0_usize..).zip((0_u64..=450).step_by(50)) {
+            result = detector
+                .push(phases[sample % phases.len()].clone(), elapsed)
+                .unwrap();
+            if matches!(result, Detection::Settled(_)) {
+                break;
+            }
+        }
 
-        assert!(score <= policy().difference_threshold);
+        assert!(matches!(
+            result,
+            Detection::Settled(QuiescenceDiagnostics {
+                reason: SettleReason::Stable,
+                ..
+            })
+        ));
     }
 
     #[test]
