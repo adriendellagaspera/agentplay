@@ -2,7 +2,11 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "agentplay", version, about = "Agents as players for non-realtime games")]
+#[command(
+    name = "agentplay",
+    version,
+    about = "Agents as players for non-realtime games"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -1,6 +1,8 @@
 [workspace]
 members = [
   "crates/agentplay-core",
+  "crates/agentplay-platform",
+  "crates/agentplay-platform-macos",
   "crates/agentplay-runner",
   "crates/agentplay-cli",
 ]
