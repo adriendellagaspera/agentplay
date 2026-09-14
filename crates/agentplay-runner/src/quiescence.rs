@@ -71,6 +71,44 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct TemporalNoiseMetric<M> {
+    inner: M,
+    history: std::collections::VecDeque<Frame>,
+    history_len: usize,
+}
+
+impl<M> TemporalNoiseMetric<M> {
+    pub fn new(inner: M, history_len: usize) -> anyhow::Result<Self> {
+        ensure!(history_len > 0, "temporal history must be greater than zero");
+        Ok(Self {
+            inner,
+            history: std::collections::VecDeque::with_capacity(history_len),
+            history_len,
+        })
+    }
+}
+
+impl<M: FrameDifferenceMetric> FrameDifferenceMetric for TemporalNoiseMetric<M> {
+    fn difference(&mut self, previous: &Frame, current: &Frame) -> anyhow::Result<u32> {
+        if self.history.is_empty() {
+            self.history.push_back(previous.clone());
+        }
+
+        let mut residual = u32::MAX;
+        for reference in &self.history {
+            residual = residual.min(self.inner.difference(reference, current)?);
+        }
+
+        self.history.push_back(current.clone());
+        while self.history.len() > self.history_len {
+            self.history.pop_front();
+        }
+
+        Ok(residual)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettleReason {
     Stable,
@@ -184,6 +222,52 @@ mod tests {
             max_wait_millis: 1_000,
             difference_threshold: 100,
         }
+    }
+
+    #[test]
+    fn short_period_animation_is_subtracted_as_temporal_noise() {
+        let mut metric =
+            TemporalNoiseMetric::new(BlockDifferenceMetric::default(), 4).unwrap();
+
+        let mut a = frame();
+        let mut b = frame();
+        let mut c = frame();
+        fill_block(&mut a, 0, 0, 32);
+        fill_block(&mut b, 0, 0, 128);
+        fill_block(&mut c, 0, 0, 255);
+
+        let sequence = [a.clone(), b.clone(), c.clone(), a, b, c];
+        let mut scores = Vec::new();
+        for pair in sequence.windows(2) {
+            scores.push(metric.difference(&pair[0], &pair[1]).unwrap());
+        }
+
+        assert_eq!(scores[2], 0);
+        assert_eq!(scores[3], 0);
+        assert_eq!(scores[4], 0);
+    }
+
+    #[test]
+    fn temporal_noise_subtraction_preserves_real_scene_change() {
+        let mut metric =
+            TemporalNoiseMetric::new(BlockDifferenceMetric::default(), 4).unwrap();
+
+        let mut a = frame();
+        let mut b = frame();
+        let mut c = frame();
+        fill_block(&mut a, 0, 0, 32);
+        fill_block(&mut b, 0, 0, 128);
+        fill_block(&mut c, 0, 0, 255);
+
+        metric.difference(&a, &b).unwrap();
+        metric.difference(&b, &c).unwrap();
+        metric.difference(&c, &a).unwrap();
+
+        let mut moved = b;
+        fill_block(&mut moved, 3, 3, 255);
+        let score = metric.difference(&a, &moved).unwrap();
+
+        assert!(score > policy().difference_threshold);
     }
 
     #[test]
