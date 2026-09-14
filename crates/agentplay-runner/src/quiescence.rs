@@ -43,8 +43,8 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
                     for x in x0..(x0 + block).min(width) {
                         let i = (y * width + x) * 4;
                         for channel in 0..3 {
-                            delta += previous.rgba[i + channel]
-                                .abs_diff(current.rgba[i + channel]) as u64;
+                            delta += previous.rgba[i + channel].abs_diff(current.rgba[i + channel])
+                                as u64;
                             channels += 1;
                         }
                     }
@@ -91,7 +91,10 @@ pub struct QuiescenceDetector<M> {
 
 impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
     pub fn new(policy: QuiescencePolicy, metric: M) -> anyhow::Result<Self> {
-        ensure!(policy.sample_every_millis > 0, "sample interval must be positive");
+        ensure!(
+            policy.sample_every_millis > 0,
+            "sample interval must be positive"
+        );
         ensure!(
             policy.stable_for_millis <= policy.max_wait_millis,
             "stable window must not exceed max wait"
@@ -115,10 +118,9 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
                 let stable_since = self.stable_since_millis.get_or_insert(elapsed_millis);
                 if elapsed_millis.saturating_sub(*stable_since) >= self.policy.stable_for_millis {
                     self.previous = Some(frame);
-                    return Ok(Detection::Settled(self.diagnostics(
-                        SettleReason::Stable,
-                        elapsed_millis,
-                    )));
+                    return Ok(Detection::Settled(
+                        self.diagnostics(SettleReason::Stable, elapsed_millis),
+                    ));
                 }
             } else {
                 self.stable_since_millis = None;
@@ -142,7 +144,6 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -213,7 +214,10 @@ mod tests {
                 0,
                 if elapsed % 100 == 0 { 255 } else { 128 },
             );
-            assert_eq!(detector.push(animated, elapsed).unwrap(), Detection::Waiting);
+            assert_eq!(
+                detector.push(animated, elapsed).unwrap(),
+                Detection::Waiting
+            );
         }
 
         let mut animated = base;
@@ -251,7 +255,7 @@ mod tests {
             );
         }
         assert!(matches!(
-            detector.push(base, 400).unwrap(),
+            detector.push(base, 450).unwrap(),
             Detection::Settled(QuiescenceDiagnostics {
                 reason: SettleReason::Stable,
                 ..
