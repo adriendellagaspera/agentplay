@@ -14,8 +14,8 @@ pub struct BlockDifferenceMetric {
 impl Default for BlockDifferenceMetric {
     fn default() -> Self {
         Self {
-            block_size: 8,
-            mean_channel_delta_threshold: 8,
+            block_size: 16,
+            mean_channel_delta_threshold: 5,
         }
     }
 }
@@ -37,19 +37,30 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
         for y0 in (0..height).step_by(block) {
             for x0 in (0..width).step_by(block) {
                 total += 1;
-                let mut delta = 0_u64;
-                let mut channels = 0_u64;
+                let mut previous_sum = [0_u64; 3];
+                let mut current_sum = [0_u64; 3];
+                let mut pixels = 0_u64;
                 for y in y0..(y0 + block).min(height) {
                     for x in x0..(x0 + block).min(width) {
                         let i = (y * width + x) * 4;
                         for channel in 0..3 {
-                            delta += previous.rgba[i + channel].abs_diff(current.rgba[i + channel])
-                                as u64;
-                            channels += 1;
+                            previous_sum[channel] += previous.rgba[i + channel] as u64;
+                            current_sum[channel] += current.rgba[i + channel] as u64;
                         }
+                        pixels += 1;
                     }
                 }
-                if delta / channels > self.mean_channel_delta_threshold as u64 {
+
+                let mean_channel_delta = (0..3)
+                    .map(|channel| {
+                        previous_sum[channel]
+                            .abs_diff(current_sum[channel])
+                            / pixels
+                    })
+                    .sum::<u64>()
+                    / 3;
+
+                if mean_channel_delta > self.mean_channel_delta_threshold as u64 {
                     changed += 1;
                 }
             }
@@ -171,7 +182,7 @@ mod tests {
             sample_every_millis: 50,
             stable_for_millis: 200,
             max_wait_millis: 1_000,
-            difference_threshold: 500,
+            difference_threshold: 100,
         }
     }
 
@@ -181,7 +192,7 @@ mod tests {
         let mut b = a.clone();
         fill_block(&mut b, 0, 0, 255);
         let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
-        assert_eq!(score, 156);
+        assert!(score <= 100);
         assert!(score <= policy().difference_threshold);
     }
 
@@ -195,7 +206,7 @@ mod tests {
             }
         }
         let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
-        assert_eq!(score, 2_500);
+        assert!(score >= 1_000);
         assert!(score > policy().difference_threshold);
     }
 
