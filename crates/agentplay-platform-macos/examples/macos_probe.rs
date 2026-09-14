@@ -11,11 +11,7 @@ fn main() -> anyhow::Result<()> {
     use agentplay_platform_macos::{InputPolicy, MacOsBackend, WindowSelector, list_windows};
     use std::time::Duration;
 
-    fn exact_selector(
-        window_id: &str,
-        pid: &str,
-        bundle: &str,
-    ) -> anyhow::Result<WindowSelector> {
+    fn exact_selector(window_id: &str, pid: &str, bundle: &str) -> anyhow::Result<WindowSelector> {
         let window_id: u32 = window_id.parse()?;
         let pid: i32 = pid.parse()?;
         let matched = list_windows()?
