@@ -142,3 +142,141 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
         }
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame() -> Frame {
+        Frame {
+            width: 64,
+            height: 64,
+            rgba: vec![0; 64 * 64 * 4],
+        }
+    }
+
+    fn fill_block(frame: &mut Frame, bx: u32, by: u32, value: u8) {
+        for y in by * 8..(by + 1) * 8 {
+            for x in bx * 8..(bx + 1) * 8 {
+                let i = ((y * frame.width + x) * 4) as usize;
+                frame.rgba[i..i + 3].fill(value);
+            }
+        }
+    }
+
+    fn policy() -> QuiescencePolicy {
+        QuiescencePolicy {
+            sample_every_millis: 50,
+            stable_for_millis: 200,
+            max_wait_millis: 1_000,
+            difference_threshold: 500,
+        }
+    }
+
+    #[test]
+    fn local_idle_animation_is_below_threshold() {
+        let a = frame();
+        let mut b = a.clone();
+        fill_block(&mut b, 0, 0, 255);
+        let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
+        assert_eq!(score, 156);
+        assert!(score <= policy().difference_threshold);
+    }
+
+    #[test]
+    fn large_scene_change_is_above_threshold() {
+        let a = frame();
+        let mut b = a.clone();
+        for y in 0..4 {
+            for x in 0..4 {
+                fill_block(&mut b, x, y, 255);
+            }
+        }
+        let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
+        assert_eq!(score, 2_500);
+        assert!(score > policy().difference_threshold);
+    }
+
+    #[test]
+    fn persistent_local_animation_can_settle() {
+        let mut detector =
+            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
+        let base = frame();
+        assert_eq!(detector.push(base.clone(), 0).unwrap(), Detection::Waiting);
+
+        for elapsed in [50, 100, 150, 200] {
+            let mut animated = base.clone();
+            fill_block(
+                &mut animated,
+                0,
+                0,
+                if elapsed % 100 == 0 { 255 } else { 128 },
+            );
+            assert_eq!(detector.push(animated, elapsed).unwrap(), Detection::Waiting);
+        }
+
+        let mut animated = base;
+        fill_block(&mut animated, 0, 0, 255);
+        assert!(matches!(
+            detector.push(animated, 250).unwrap(),
+            Detection::Settled(QuiescenceDiagnostics {
+                reason: SettleReason::Stable,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn meaningful_change_resets_stability_window() {
+        let mut detector =
+            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
+        let base = frame();
+        detector.push(base.clone(), 0).unwrap();
+        detector.push(base.clone(), 50).unwrap();
+        detector.push(base.clone(), 100).unwrap();
+
+        let mut changed = base.clone();
+        for y in 0..4 {
+            for x in 0..4 {
+                fill_block(&mut changed, x, y, 255);
+            }
+        }
+        assert_eq!(detector.push(changed, 150).unwrap(), Detection::Waiting);
+
+        for elapsed in [200, 250, 300, 350] {
+            assert_eq!(
+                detector.push(base.clone(), elapsed).unwrap(),
+                Detection::Waiting
+            );
+        }
+        assert!(matches!(
+            detector.push(base, 400).unwrap(),
+            Detection::Settled(QuiescenceDiagnostics {
+                reason: SettleReason::Stable,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn timeout_is_reported() {
+        let mut detector =
+            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
+        let a = frame();
+        detector.push(a.clone(), 0).unwrap();
+        let mut b = a;
+        for y in 0..4 {
+            for x in 0..4 {
+                fill_block(&mut b, x, y, 255);
+            }
+        }
+        assert!(matches!(
+            detector.push(b, 1_000).unwrap(),
+            Detection::Settled(QuiescenceDiagnostics {
+                reason: SettleReason::Timeout,
+                ..
+            })
+        ));
+    }
+}
