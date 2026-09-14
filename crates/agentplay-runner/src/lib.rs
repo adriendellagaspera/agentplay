@@ -1,4 +1,4 @@
-use agentplay_core::{Action, Agent, Environment, Observation};
+use agentplay_core::{Agent, Decision, Environment, Observation};
 
 #[derive(Clone, Debug, Default)]
 pub struct RunLimits {
@@ -33,18 +33,14 @@ where
                 return Ok(observation);
             }
 
-            let action = self.agent.act(&observation).await?;
-            action.validate()?;
-            let player_action_count = action.plan_ref().actions.len();
-            let transition = self.environment.step(action).await?;
+            let decision = self.agent.decide(&observation).await?;
+            decision.validate()?;
+            let action_count = decision.actions.len();
+            let transition = self.environment.step(decision).await?;
             observation = transition.observation;
             steps += 1;
 
-            tracing::debug!(
-                steps,
-                player_action_count,
-                "completed environment step"
-            );
+            tracing::debug!(steps, action_count, "completed environment step");
         }
     }
 }
@@ -52,7 +48,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentplay_core::{Frame, Key, PlayerAction, Step};
+    use agentplay_core::{Action, Frame, Key, Step};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -67,19 +63,19 @@ mod tests {
         }
     }
 
-    struct FixedActionAgent {
-        action: Action,
+    struct FixedDecisionAgent {
+        decision: Decision,
     }
 
     #[async_trait]
-    impl Agent for FixedActionAgent {
-        async fn act(&mut self, _observation: &Observation) -> anyhow::Result<Action> {
-            Ok(self.action.clone())
+    impl Agent for FixedDecisionAgent {
+        async fn decide(&mut self, _observation: &Observation) -> anyhow::Result<Decision> {
+            Ok(self.decision.clone())
         }
     }
 
     struct RecordingEnvironment {
-        actions: Arc<Mutex<Vec<Action>>>,
+        decisions: Arc<Mutex<Vec<Decision>>>,
     }
 
     #[async_trait]
@@ -88,8 +84,8 @@ mod tests {
             Ok(observation(0))
         }
 
-        async fn step(&mut self, action: Action) -> anyhow::Result<Step> {
-            self.actions.lock().unwrap().push(action);
+        async fn step(&mut self, decision: Decision) -> anyhow::Result<Step> {
+            self.decisions.lock().unwrap().push(decision);
             Ok(Step {
                 observation: observation(1),
                 settle_millis: 12,
@@ -98,21 +94,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forwards_a_plan_as_one_environment_step() {
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        let action = Action::plan(vec![
-            PlayerAction::KeyPress(Key::Right),
-            PlayerAction::KeyPress(Key::Right),
-            PlayerAction::KeyPress(Key::Up),
+    async fn forwards_multiple_actions_as_one_environment_step() {
+        let decisions = Arc::new(Mutex::new(Vec::new()));
+        let decision = Decision::new(vec![
+            Action::KeyPress(Key::Right),
+            Action::KeyPress(Key::Right),
+            Action::KeyPress(Key::Up),
         ])
         .unwrap();
 
         let runner = Runner::new(
             RecordingEnvironment {
-                actions: Arc::clone(&actions),
+                decisions: Arc::clone(&decisions),
             },
-            FixedActionAgent {
-                action: action.clone(),
+            FixedDecisionAgent {
+                decision: decision.clone(),
             },
             RunLimits { max_steps: Some(1) },
         );
@@ -120,48 +116,48 @@ mod tests {
         let final_observation = runner.run().await.unwrap();
 
         assert_eq!(final_observation.sequence, 1);
-        assert_eq!(actions.lock().unwrap().as_slice(), &[action]);
+        assert_eq!(decisions.lock().unwrap().as_slice(), &[decision]);
     }
 
     #[tokio::test]
     async fn repeated_waits_are_forwarded_as_one_environment_step() {
-        let actions = Arc::new(Mutex::new(Vec::new()));
-        let action = Action::repeat(PlayerAction::Wait, 10).unwrap();
+        let decisions = Arc::new(Mutex::new(Vec::new()));
+        let decision = Decision::repeat(Action::Wait, 10).unwrap();
 
         let runner = Runner::new(
             RecordingEnvironment {
-                actions: Arc::clone(&actions),
+                decisions: Arc::clone(&decisions),
             },
-            FixedActionAgent {
-                action: action.clone(),
+            FixedDecisionAgent {
+                decision: decision.clone(),
             },
             RunLimits { max_steps: Some(1) },
         );
 
         runner.run().await.unwrap();
 
-        assert_eq!(actions.lock().unwrap().as_slice(), &[action]);
+        assert_eq!(decisions.lock().unwrap().as_slice(), &[decision]);
     }
 
     #[tokio::test]
-    async fn rejects_an_empty_plan_before_environment_execution() {
-        let actions = Arc::new(Mutex::new(Vec::new()));
+    async fn rejects_an_empty_decision_before_environment_execution() {
+        let decisions = Arc::new(Mutex::new(Vec::new()));
         let runner = Runner::new(
             RecordingEnvironment {
-                actions: Arc::clone(&actions),
+                decisions: Arc::clone(&decisions),
             },
-            FixedActionAgent {
-                action: Action::Plan(agentplay_core::ActionPlan {
+            FixedDecisionAgent {
+                decision: Decision {
                     actions: Vec::new(),
                     inter_action_delay_millis: 0,
-                }),
+                },
             },
             RunLimits { max_steps: Some(1) },
         );
 
         let error = runner.run().await.unwrap_err();
 
-        assert!(error.to_string().contains("at least one player action"));
-        assert!(actions.lock().unwrap().is_empty());
+        assert!(error.to_string().contains("at least one action"));
+        assert!(decisions.lock().unwrap().is_empty());
     }
 }
