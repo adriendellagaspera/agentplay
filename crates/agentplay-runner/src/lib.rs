@@ -1,4 +1,4 @@
-use agentplay_core::{Agent, Decision, Environment, Observation};
+use agentplay_core::{Agent, Environment, Observation};
 
 #[derive(Clone, Debug, Default)]
 pub struct RunLimits {
@@ -48,7 +48,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentplay_core::{Action, Frame, Key, Step};
+    use agentplay_core::{Action, Decision, Frame, Key, Step};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
