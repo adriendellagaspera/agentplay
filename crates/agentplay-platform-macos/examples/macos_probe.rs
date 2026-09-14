@@ -1,10 +1,3 @@
-#[cfg(target_os = "macos")]
-use agentplay_core::Key;
-#[cfg(target_os = "macos")]
-use agentplay_platform::{CaptureBackend, InputBackend};
-#[cfg(target_os = "macos")]
-use std::time::Duration;
-
 #[cfg(not(target_os = "macos"))]
 fn main() {
     eprintln!("macos_probe is only available on macOS");
@@ -13,7 +6,47 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {
-    use agentplay_platform_macos::{InputPolicy, MacOsBackend, list_windows};
+    use agentplay_core::Key;
+    use agentplay_platform::{CaptureBackend, InputBackend};
+    use agentplay_platform_macos::{InputPolicy, MacOsBackend, WindowSelector, list_windows};
+    use std::time::Duration;
+
+    fn exact_selector(
+        window_id: &str,
+        pid: &str,
+        bundle: &str,
+    ) -> anyhow::Result<WindowSelector> {
+        let window_id: u32 = window_id.parse()?;
+        let pid: i32 = pid.parse()?;
+        let matched = list_windows()?
+            .into_iter()
+            .find(|window| {
+                window.window_id == window_id
+                    && window.pid == pid
+                    && window.bundle_identifier == bundle
+            })
+            .ok_or_else(|| anyhow::anyhow!("exact target window was not found"))?;
+        Ok(WindowSelector {
+            pid: Some(matched.pid),
+            bundle_identifier: Some(matched.bundle_identifier),
+            title_contains: matched.title,
+        })
+    }
+
+    fn parse_key(value: &str) -> anyhow::Result<Key> {
+        Ok(match value.to_ascii_lowercase().as_str() {
+            "up" => Key::Up,
+            "down" => Key::Down,
+            "left" => Key::Left,
+            "right" => Key::Right,
+            "enter" => Key::Enter,
+            "space" => Key::Space,
+            value if value.chars().count() == 1 => {
+                Key::Character(value.chars().next().expect("one-character key"))
+            }
+            _ => anyhow::bail!("key must be a direction, enter, space, or one character"),
+        })
+    }
 
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
@@ -52,39 +85,4 @@ fn main() -> anyhow::Result<()> {
         ),
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn exact_selector(
-    window_id: &str,
-    pid: &str,
-    bundle: &str,
-) -> anyhow::Result<agentplay_platform_macos::WindowSelector> {
-    let window_id: u32 = window_id.parse()?;
-    let pid: i32 = pid.parse()?;
-    let matched = agentplay_platform_macos::list_windows()?
-        .into_iter()
-        .find(|window| {
-            window.window_id == window_id && window.pid == pid && window.bundle_identifier == bundle
-        })
-        .ok_or_else(|| anyhow::anyhow!("exact target window was not found"))?;
-    Ok(agentplay_platform_macos::WindowSelector {
-        pid: Some(matched.pid),
-        bundle_identifier: Some(matched.bundle_identifier),
-        title_contains: matched.title,
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn parse_key(value: &str) -> anyhow::Result<Key> {
-    Ok(match value.to_ascii_lowercase().as_str() {
-        "up" => Key::Up,
-        "down" => Key::Down,
-        "left" => Key::Left,
-        "right" => Key::Right,
-        "enter" => Key::Enter,
-        "space" => Key::Space,
-        value if value.chars().count() == 1 => Key::Character(value.chars().next().unwrap()),
-        _ => anyhow::bail!("key must be a direction, enter, space, or one character"),
-    })
 }
