@@ -33,6 +33,67 @@ pub enum Action {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Decision {
+    pub actions: Vec<Action>,
+    pub inter_action_delay_millis: u64,
+}
+
+impl Decision {
+    pub fn new(actions: Vec<Action>) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            !actions.is_empty(),
+            "decision must contain at least one action"
+        );
+        Ok(Self {
+            actions,
+            inter_action_delay_millis: 0,
+        })
+    }
+
+    pub fn single(action: Action) -> Self {
+        Self {
+            actions: vec![action],
+            inter_action_delay_millis: 0,
+        }
+    }
+
+    pub fn press(key: Key) -> Self {
+        Self::single(Action::KeyPress(key))
+    }
+
+    pub fn wait() -> Self {
+        Self::single(Action::Wait)
+    }
+
+    pub fn repeat(action: Action, count: usize) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            count > 0,
+            "action repetition count must be greater than zero"
+        );
+        Self::new(vec![action; count])
+    }
+
+    pub fn with_inter_action_delay(mut self, duration: Duration) -> Self {
+        self.inter_action_delay_millis = duration.as_millis() as u64;
+        self
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.actions.is_empty(),
+            "decision must contain at least one action"
+        );
+        Ok(())
+    }
+}
+
+impl From<Action> for Decision {
+    fn from(action: Action) -> Self {
+        Self::single(action)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TemporalPolicy {
     FixedDelay { millis: u64 },
     UntilQuiescent(QuiescencePolicy),
@@ -76,10 +137,54 @@ pub struct Step {
 #[async_trait]
 pub trait Environment: Send {
     async fn observe(&mut self) -> anyhow::Result<Observation>;
-    async fn step(&mut self, action: Action) -> anyhow::Result<Step>;
+    async fn step(&mut self, decision: Decision) -> anyhow::Result<Step>;
 }
 
 #[async_trait]
 pub trait Agent: Send {
-    async fn act(&mut self, observation: &Observation) -> anyhow::Result<Action>;
+    async fn decide(&mut self, observation: &Observation) -> anyhow::Result<Decision>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_converts_to_single_action_decision() {
+        let decision: Decision = Action::KeyPress(Key::Right).into();
+        assert_eq!(decision.actions, vec![Action::KeyPress(Key::Right)]);
+    }
+
+    #[test]
+    fn wait_helper_is_a_single_action_decision() {
+        assert_eq!(Decision::wait().actions, vec![Action::Wait]);
+    }
+
+    #[test]
+    fn repeated_waits_remain_one_decision() {
+        let decision = Decision::repeat(Action::Wait, 10).unwrap();
+        assert_eq!(decision.actions, vec![Action::Wait; 10]);
+    }
+
+    #[test]
+    fn empty_decision_is_rejected() {
+        assert!(Decision::new(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn zero_repetition_is_rejected() {
+        assert!(Decision::repeat(Action::Wait, 0).is_err());
+    }
+
+    #[test]
+    fn pacing_is_explicit_and_separate_from_settle() {
+        let decision = Decision::new(vec![
+            Action::KeyPress(Key::Right),
+            Action::KeyPress(Key::Right),
+        ])
+        .unwrap()
+        .with_inter_action_delay(Duration::from_millis(25));
+
+        assert_eq!(decision.inter_action_delay_millis, 25);
+    }
 }
