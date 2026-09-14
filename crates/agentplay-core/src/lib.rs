@@ -66,7 +66,10 @@ impl Decision {
     }
 
     pub fn repeat(action: Action, count: usize) -> anyhow::Result<Self> {
-        anyhow::ensure!(count > 0, "action repetition count must be greater than zero");
+        anyhow::ensure!(
+            count > 0,
+            "action repetition count must be greater than zero"
+        );
         Self::new(vec![action; count])
     }
 
