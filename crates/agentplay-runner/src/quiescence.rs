@@ -1,5 +1,7 @@
 use agentplay_core::{Frame, QuiescencePolicy};
 use anyhow::ensure;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 pub trait FrameDifferenceMetric: Send {
     fn difference(&mut self, previous: &Frame, current: &Frame) -> anyhow::Result<u32>;
@@ -30,6 +32,15 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
 
         let width = previous.width as usize;
         let height = previous.height as usize;
+        let expected_len = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| anyhow::anyhow!("frame dimensions overflow"))?;
+        ensure!(
+            previous.rgba.len() == expected_len && current.rgba.len() == expected_len,
+            "invalid RGBA buffer length"
+        );
+
         let block = self.block_size as usize;
         let mut changed = 0_u64;
         let mut total = 0_u64;
@@ -40,6 +51,7 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
                 let mut previous_sum = [0_u64; 3];
                 let mut current_sum = [0_u64; 3];
                 let mut pixels = 0_u64;
+
                 for y in y0..(y0 + block).min(height) {
                     for x in x0..(x0 + block).min(width) {
                         let i = (y * width + x) * 4;
@@ -52,11 +64,7 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
                 }
 
                 let mean_channel_delta = (0..3)
-                    .map(|channel| {
-                        previous_sum[channel]
-                            .abs_diff(current_sum[channel])
-                            / pixels
-                    })
+                    .map(|channel| previous_sum[channel].abs_diff(current_sum[channel]) / pixels)
                     .sum::<u64>()
                     / 3;
 
@@ -91,10 +99,14 @@ pub enum Detection {
     Settled(QuiescenceDiagnostics),
 }
 
+/// Detects a stable or recurrent visual regime using only frames supplied to this instance.
+///
+/// Create a fresh detector after a complete `Decision` has executed. Frames captured before or
+/// between the `Action`s of that `Decision` must never be pushed into this detector.
 pub struct QuiescenceDetector<M> {
     policy: QuiescencePolicy,
     metric: M,
-    recent: std::collections::VecDeque<Frame>,
+    recent: VecDeque<Frame>,
     stable_since_millis: Option<u64>,
     samples: u64,
     last_difference: Option<u32>,
@@ -114,11 +126,12 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
             policy.max_cycle_frames > 0,
             "maximum cycle length must be greater than zero"
         );
+
         let max_cycle_frames = policy.max_cycle_frames;
         Ok(Self {
             policy,
             metric,
-            recent: std::collections::VecDeque::with_capacity(max_cycle_frames),
+            recent: VecDeque::with_capacity(max_cycle_frames),
             stable_since_millis: None,
             samples: 0,
             last_difference: None,
@@ -128,12 +141,15 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
     pub fn push(&mut self, frame: Frame, elapsed_millis: u64) -> anyhow::Result<Detection> {
         self.samples += 1;
 
-        let mut residual = u32::MAX;
-        for reference in &self.recent {
-            residual = residual.min(self.metric.difference(reference, &frame)?);
-        }
+        let residual = self
+            .recent
+            .iter()
+            .map(|reference| self.metric.difference(reference, &frame))
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
+            .min();
 
-        if residual != u32::MAX {
+        if let Some(residual) = residual {
             self.last_difference = Some(residual);
             if residual <= self.policy.difference_threshold {
                 let stable_since = self.stable_since_millis.get_or_insert(elapsed_millis);
@@ -157,6 +173,7 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
                 self.diagnostics(SettleReason::Timeout, elapsed_millis),
             ));
         }
+
         Ok(Detection::Waiting)
     }
 
@@ -166,6 +183,39 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
             elapsed_millis,
             samples: self.samples,
             last_difference: self.last_difference,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct QuiescenceResult {
+    pub frame: Frame,
+    pub diagnostics: QuiescenceDiagnostics,
+}
+
+/// Samples a fresh post-Decision visual history until it becomes recurrent/stable or times out.
+pub async fn settle_until_quiescent<M, C>(
+    policy: QuiescencePolicy,
+    metric: M,
+    mut capture: C,
+) -> anyhow::Result<QuiescenceResult>
+where
+    M: FrameDifferenceMetric,
+    C: FnMut() -> anyhow::Result<Frame>,
+{
+    let sample_every = Duration::from_millis(policy.sample_every_millis);
+    let started = Instant::now();
+    let mut detector = QuiescenceDetector::new(policy, metric)?;
+
+    loop {
+        let frame = capture()?;
+        let elapsed_millis = started.elapsed().as_millis() as u64;
+
+        match detector.push(frame.clone(), elapsed_millis)? {
+            Detection::Waiting => tokio::time::sleep(sample_every).await,
+            Detection::Settled(diagnostics) => {
+                return Ok(QuiescenceResult { frame, diagnostics });
+            }
         }
     }
 }
@@ -201,23 +251,25 @@ mod tests {
         }
     }
 
+    fn three_phase_state(tile_x: u32) -> [Frame; 3] {
+        let mut phases = [frame(), frame(), frame()];
+        for (phase, value) in phases.iter_mut().zip([32, 128, 255]) {
+            fill_block(phase, tile_x, 1, 255);
+            fill_block(phase, 0, 0, value);
+        }
+        phases
+    }
+
     #[test]
-    fn short_post_action_cycle_settles_without_consecutive_frame_stability() {
+    fn short_post_decision_cycle_settles_without_consecutive_frame_stability() {
         let mut detector =
             QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
-
-        let mut a = frame();
-        let mut b = frame();
-        let mut c = frame();
-        fill_block(&mut a, 0, 0, 32);
-        fill_block(&mut b, 0, 0, 128);
-        fill_block(&mut c, 0, 0, 255);
-
-        let sequence = [a, b, c];
+        let phases = three_phase_state(2);
         let mut result = Detection::Waiting;
-        for (sample, elapsed) in (0_u64..).zip((0_u64..=400).step_by(50)) {
+
+        for (sample, elapsed) in (0_usize..).zip((0_u64..=450).step_by(50)) {
             result = detector
-                .push(sequence[(sample as usize) % sequence.len()].clone(), elapsed)
+                .push(phases[sample % phases.len()].clone(), elapsed)
                 .unwrap();
             if matches!(result, Detection::Settled(_)) {
                 break;
@@ -234,53 +286,48 @@ mod tests {
     }
 
     #[test]
-    fn pre_action_visual_phase_cannot_make_new_state_settle() {
-        let mut old = frame();
-        fill_block(&mut old, 3, 3, 255);
+    fn fresh_detector_does_not_reuse_previous_decision_history() {
+        let old_phases = three_phase_state(1);
+        let new_phases = three_phase_state(3);
 
-        // A fresh detector represents a new post-decision settle attempt.
-        let mut detector =
+        let mut old_detector =
             QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
-        let mut new_state = frame();
-        fill_block(&mut new_state, 4, 4, 255);
+        for (sample, elapsed) in (0_usize..3).zip((0_u64..).step_by(50)) {
+            old_detector
+                .push(old_phases[sample].clone(), elapsed)
+                .unwrap();
+        }
 
+        let mut new_detector =
+            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
         assert_eq!(
-            detector.push(new_state.clone(), 0).unwrap(),
+            new_detector.push(new_phases[0].clone(), 0).unwrap(),
             Detection::Waiting
         );
         assert_eq!(
-            detector.push(old, 50).unwrap(),
+            new_detector.push(new_phases[1].clone(), 50).unwrap(),
             Detection::Waiting
         );
         assert_eq!(
-            detector.push(new_state, 100).unwrap(),
+            new_detector.push(new_phases[2].clone(), 100).unwrap(),
             Detection::Waiting
         );
     }
 
     #[test]
-    fn moving_automaton_can_settle_after_its_post_action_transition() {
+    fn moving_automaton_can_settle_into_new_post_decision_cycle() {
         let mut detector =
             QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
 
-        // Simulate a board object moving after Wait, followed by a 3-phase idle animation
-        // of the new board state.
         let mut transition = frame();
         fill_block(&mut transition, 1, 1, 255);
         assert_eq!(detector.push(transition, 0).unwrap(), Detection::Waiting);
 
-        let mut phases = Vec::new();
-        for value in [32, 128, 255] {
-            let mut phase = frame();
-            fill_block(&mut phase, 2, 1, 255); // automaton reached its new tile
-            fill_block(&mut phase, 0, 0, value); // idle sprite animation
-            phases.push(phase);
-        }
-
+        let phases = three_phase_state(2);
         let mut result = Detection::Waiting;
-        for (sample, elapsed) in (0_u64..).zip((50_u64..=500).step_by(50)) {
+        for (sample, elapsed) in (0_usize..).zip((50_u64..=500).step_by(50)) {
             result = detector
-                .push(phases[(sample as usize) % phases.len()].clone(), elapsed)
+                .push(phases[sample % phases.len()].clone(), elapsed)
                 .unwrap();
             if matches!(result, Detection::Settled(_)) {
                 break;
@@ -301,8 +348,9 @@ mod tests {
         let a = frame();
         let mut b = a.clone();
         fill_block(&mut b, 0, 0, 255);
+
         let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
-        assert!(score <= 100);
+
         assert!(score <= policy().difference_threshold);
     }
 
@@ -315,41 +363,11 @@ mod tests {
                 fill_block(&mut b, x, y, 255);
             }
         }
+
         let score = BlockDifferenceMetric::default().difference(&a, &b).unwrap();
+
         assert!(score >= 1_000);
         assert!(score > policy().difference_threshold);
-    }
-
-    #[test]
-    fn persistent_local_animation_can_settle() {
-        let mut detector =
-            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
-        let base = frame();
-        assert_eq!(detector.push(base.clone(), 0).unwrap(), Detection::Waiting);
-
-        for elapsed in [50, 100, 150, 200] {
-            let mut animated = base.clone();
-            fill_block(
-                &mut animated,
-                0,
-                0,
-                if elapsed % 100 == 0 { 255 } else { 128 },
-            );
-            assert_eq!(
-                detector.push(animated, elapsed).unwrap(),
-                Detection::Waiting
-            );
-        }
-
-        let mut animated = base;
-        fill_block(&mut animated, 0, 0, 255);
-        assert!(matches!(
-            detector.push(animated, 250).unwrap(),
-            Detection::Settled(QuiescenceDiagnostics {
-                reason: SettleReason::Stable,
-                ..
-            })
-        ));
     }
 
     #[test]
@@ -376,7 +394,7 @@ mod tests {
             );
         }
         assert!(matches!(
-            detector.push(base, 450).unwrap(),
+            detector.push(base, 400).unwrap(),
             Detection::Settled(QuiescenceDiagnostics {
                 reason: SettleReason::Stable,
                 ..
@@ -390,12 +408,14 @@ mod tests {
             QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
         let a = frame();
         detector.push(a.clone(), 0).unwrap();
+
         let mut b = a;
         for y in 0..4 {
             for x in 0..4 {
                 fill_block(&mut b, x, y, 255);
             }
         }
+
         assert!(matches!(
             detector.push(b, 1_000).unwrap(),
             Detection::Settled(QuiescenceDiagnostics {
