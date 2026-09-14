@@ -27,34 +27,27 @@ pub enum Key {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Action {
+pub enum PlayerAction {
     KeyPress(Key),
     Wait,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionPlan {
-    pub actions: Vec<Action>,
+    pub actions: Vec<PlayerAction>,
     pub inter_action_delay_millis: u64,
 }
 
 impl ActionPlan {
-    pub fn new(actions: Vec<Action>) -> anyhow::Result<Self> {
+    pub fn new(actions: Vec<PlayerAction>) -> anyhow::Result<Self> {
         anyhow::ensure!(
             !actions.is_empty(),
-            "action plan must contain at least one action"
+            "action plan must contain at least one player action"
         );
         Ok(Self {
             actions,
             inter_action_delay_millis: 0,
         })
-    }
-
-    pub fn single(action: Action) -> Self {
-        Self {
-            actions: vec![action],
-            inter_action_delay_millis: 0,
-        }
     }
 
     pub fn with_inter_action_delay(mut self, duration: Duration) -> Self {
@@ -65,15 +58,56 @@ impl ActionPlan {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             !self.actions.is_empty(),
-            "action plan must contain at least one action"
+            "action plan must contain at least one player action"
         );
         Ok(())
     }
 }
 
-impl From<Action> for ActionPlan {
-    fn from(action: Action) -> Self {
-        Self::single(action)
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Action {
+    Plan(ActionPlan),
+}
+
+impl Action {
+    pub fn plan(actions: Vec<PlayerAction>) -> anyhow::Result<Self> {
+        Ok(Self::Plan(ActionPlan::new(actions)?))
+    }
+
+    pub fn single(action: PlayerAction) -> Self {
+        Self::Plan(ActionPlan {
+            actions: vec![action],
+            inter_action_delay_millis: 0,
+        })
+    }
+
+    pub fn press(key: Key) -> Self {
+        Self::single(PlayerAction::KeyPress(key))
+    }
+
+    pub fn wait() -> Self {
+        Self::single(PlayerAction::Wait)
+    }
+
+    pub fn repeat(action: PlayerAction, count: usize) -> anyhow::Result<Self> {
+        anyhow::ensure!(count > 0, "action repetition count must be greater than zero");
+        Self::plan(vec![action; count])
+    }
+
+    pub fn with_inter_action_delay(self, duration: Duration) -> Self {
+        match self {
+            Self::Plan(plan) => Self::Plan(plan.with_inter_action_delay(duration)),
+        }
+    }
+
+    pub fn plan_ref(&self) -> &ActionPlan {
+        match self {
+            Self::Plan(plan) => plan,
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.plan_ref().validate()
     }
 }
 
@@ -121,12 +155,12 @@ pub struct Step {
 #[async_trait]
 pub trait Environment: Send {
     async fn observe(&mut self) -> anyhow::Result<Observation>;
-    async fn step(&mut self, plan: ActionPlan) -> anyhow::Result<Step>;
+    async fn step(&mut self, action: Action) -> anyhow::Result<Step>;
 }
 
 #[async_trait]
 pub trait Agent: Send {
-    async fn act(&mut self, observation: &Observation) -> anyhow::Result<ActionPlan>;
+    async fn act(&mut self, observation: &Observation) -> anyhow::Result<Action>;
 }
 
 #[cfg(test)]
@@ -134,32 +168,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_action_is_a_one_action_plan() {
-        let plan = ActionPlan::single(Action::KeyPress(Key::Right));
-        assert_eq!(plan.actions, vec![Action::KeyPress(Key::Right)]);
-        assert_eq!(plan.inter_action_delay_millis, 0);
+    fn single_player_action_is_a_one_action_plan() {
+        let action = Action::press(Key::Right);
+        assert_eq!(
+            action.plan_ref().actions,
+            vec![PlayerAction::KeyPress(Key::Right)]
+        );
+    }
+
+    #[test]
+    fn wait_is_a_one_action_plan() {
+        let action = Action::wait();
+        assert_eq!(action.plan_ref().actions, vec![PlayerAction::Wait]);
+    }
+
+    #[test]
+    fn repeated_waits_remain_one_agent_action() {
+        let action = Action::repeat(PlayerAction::Wait, 10).unwrap();
+        assert_eq!(action.plan_ref().actions, vec![PlayerAction::Wait; 10]);
     }
 
     #[test]
     fn empty_action_plan_is_rejected() {
-        assert!(ActionPlan::new(Vec::new()).is_err());
+        assert!(Action::plan(Vec::new()).is_err());
     }
 
     #[test]
-    fn action_converts_to_single_action_plan() {
-        let plan: ActionPlan = Action::Wait.into();
-        assert_eq!(plan, ActionPlan::single(Action::Wait));
+    fn zero_repetition_is_rejected() {
+        assert!(Action::repeat(PlayerAction::Wait, 0).is_err());
     }
 
     #[test]
     fn pacing_is_explicit_and_separate_from_settle() {
-        let plan = ActionPlan::new(vec![
-            Action::KeyPress(Key::Right),
-            Action::KeyPress(Key::Right),
+        let action = Action::plan(vec![
+            PlayerAction::KeyPress(Key::Right),
+            PlayerAction::KeyPress(Key::Right),
         ])
         .unwrap()
         .with_inter_action_delay(Duration::from_millis(25));
 
-        assert_eq!(plan.inter_action_delay_millis, 25);
+        assert_eq!(action.plan_ref().inter_action_delay_millis, 25);
     }
 }
