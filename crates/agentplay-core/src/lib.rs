@@ -107,6 +107,7 @@ pub struct QuiescencePolicy {
     pub stable_for_millis: u64,
     pub max_wait_millis: u64,
     pub difference_threshold: u32,
+    pub max_cycle_frames: usize,
 }
 
 impl Default for QuiescencePolicy {
@@ -115,7 +116,8 @@ impl Default for QuiescencePolicy {
             sample_every_millis: 50,
             stable_for_millis: 200,
             max_wait_millis: 2_000,
-            difference_threshold: 0,
+            difference_threshold: 100,
+            max_cycle_frames: 4,
         }
     }
 }
