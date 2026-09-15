@@ -3,8 +3,8 @@ use agentplay_core::{Frame, Key};
 use anyhow::{Context, Result, bail, ensure};
 use png::{BitDepth, ColorType, Decoder, Transformations};
 use serde::Deserialize;
-use std::io::Cursor;
-use std::process::{Command, Output};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Output, Stdio};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -96,9 +96,103 @@ impl InputPolicy {
     }
 }
 
+struct BridgeSession {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl BridgeSession {
+    fn start(target: &TargetIdentity) -> Result<Self> {
+        let mut child = Command::new(env!("AGENTPLAY_MACOS_BRIDGE"))
+            .args([
+                "session",
+                &target.window_id.to_string(),
+                &target.pid.to_string(),
+                &target.bundle_identifier,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .context("starting AgentPlay macOS native session")?;
+        let stdin = child
+            .stdin
+            .take()
+            .context("opening macOS native session stdin")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("opening macOS native session stdout")?;
+        let mut session = Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        };
+        let ready = session.read_line()?;
+        ensure!(
+            ready == "READY",
+            "unexpected macOS native session handshake {ready:?}"
+        );
+        Ok(session)
+    }
+
+    fn capture(&mut self) -> Result<Frame> {
+        let response = self.request("capture")?;
+        if let Some(message) = response.strip_prefix("ERR ") {
+            bail!("macOS native session: {message}");
+        }
+        let length = response
+            .strip_prefix("OK ")
+            .context("invalid macOS capture response")?
+            .parse::<usize>()
+            .context("invalid macOS capture payload length")?;
+        let mut png = vec![0_u8; length];
+        self.stdout
+            .read_exact(&mut png)
+            .context("reading macOS capture payload")?;
+        decode_png(&png)
+    }
+
+    fn press(&mut self, key_code: u16, hold_millis: u128) -> Result<()> {
+        let response = self.request(&format!("press {key_code} {hold_millis}"))?;
+        if let Some(message) = response.strip_prefix("ERR ") {
+            bail!("macOS native session: {message}");
+        }
+        ensure!(response == "OK", "invalid macOS input response {response:?}");
+        Ok(())
+    }
+
+    fn request(&mut self, command: &str) -> Result<String> {
+        writeln!(self.stdin, "{command}").context("writing macOS native session command")?;
+        self.stdin
+            .flush()
+            .context("flushing macOS native session command")?;
+        self.read_line()
+    }
+
+    fn read_line(&mut self) -> Result<String> {
+        let mut line = String::new();
+        let bytes = self
+            .stdout
+            .read_line(&mut line)
+            .context("reading macOS native session response")?;
+        ensure!(bytes > 0, "macOS native session exited unexpectedly");
+        Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+    }
+}
+
+impl Drop for BridgeSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 pub struct MacOsBackend {
     target: TargetIdentity,
     input_policy: InputPolicy,
+    session: BridgeSession,
 }
 
 impl MacOsBackend {
@@ -134,10 +228,12 @@ impl MacOsBackend {
                 bail!("window selector is ambiguous; matched: {candidates}")
             }
         };
+        let session = BridgeSession::start(&target)?;
 
         Ok(Self {
             target,
             input_policy,
+            session,
         })
     }
 
@@ -158,22 +254,11 @@ impl MacOsBackend {
             && window.pid == self.target.pid
             && window.bundle_identifier == self.target.bundle_identifier
     }
-
-    fn target_args(&self) -> [String; 3] {
-        [
-            self.target.window_id.to_string(),
-            self.target.pid.to_string(),
-            self.target.bundle_identifier.clone(),
-        ]
-    }
 }
 
 impl CaptureBackend for MacOsBackend {
     fn capture(&mut self) -> Result<Frame> {
-        self.target()?;
-        let args = self.target_args();
-        let output = run_bridge(["capture", &args[0], &args[1], &args[2]])?;
-        decode_png(&output.stdout)
+        self.session.capture()
     }
 }
 
@@ -183,20 +268,9 @@ impl InputBackend for MacOsBackend {
             self.input_policy.allows(key),
             "key {key:?} is not present in the input allowlist"
         );
-        self.target()?;
         let key_code = key_code(key)?;
-        let args = self.target_args();
-        let key_code = key_code.to_string();
-        let hold_millis = self.input_policy.key_hold.as_millis().to_string();
-        run_bridge([
-            "press",
-            &args[0],
-            &args[1],
-            &args[2],
-            &key_code,
-            &hold_millis,
-        ])?;
-        Ok(())
+        self.session
+            .press(key_code, self.input_policy.key_hold.as_millis())
     }
 }
 
