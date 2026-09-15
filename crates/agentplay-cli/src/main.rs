@@ -1,4 +1,6 @@
-use agentplay_core::{Action, Key};
+use agentplay_core::Key;
+#[cfg(any(target_os = "macos", test))]
+use agentplay_core::Action;
 #[cfg(target_os = "macos")]
 use anyhow::{Context, ensure};
 use clap::{Args, Parser, Subcommand};
@@ -79,6 +81,7 @@ fn parse_key(value: &str) -> Result<Key, String> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_actions(line: &str) -> anyhow::Result<Vec<Action>> {
     let mut actions = Vec::new();
     for token in line.split_whitespace() {
