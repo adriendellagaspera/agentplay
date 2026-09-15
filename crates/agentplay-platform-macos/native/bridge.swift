@@ -32,6 +32,49 @@ enum BridgeError: Error, CustomStringConvertible {
     }
 }
 
+final class WindowSession {
+    let pid: Int32
+    let filter: SCContentFilter
+    let configuration: SCStreamConfiguration
+
+    init(window: SCWindow, pid: Int32) {
+        self.pid = pid
+        filter = SCContentFilter(desktopIndependentWindow: window)
+        configuration = SCStreamConfiguration()
+        configuration.width = max(1, Int(filter.contentRect.width * CGFloat(filter.pointPixelScale)))
+        configuration.height = max(1, Int(filter.contentRect.height * CGFloat(filter.pointPixelScale)))
+        configuration.showsCursor = false
+    }
+
+    func capture() async throws -> Data {
+        let image = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        )
+        return try AgentPlayMacOSBridge.encodePNG(image)
+    }
+
+    func press(keyCode: CGKeyCode, holdMillis: UInt64) async throws {
+        let accessibilityOptions = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        guard AXIsProcessTrustedWithOptions(accessibilityOptions) else {
+            throw BridgeError.accessibilityPermissionMissing
+        }
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
+            throw BridgeError.usage("failed to create CoreGraphics keyboard event")
+        }
+
+        down.postToPid(pid)
+        if holdMillis > 0 {
+            try await Task.sleep(for: .milliseconds(holdMillis))
+        }
+        up.postToPid(pid)
+    }
+}
+
 @main
 struct AgentPlayMacOSBridge {
     static func main() async {
@@ -48,7 +91,7 @@ struct AgentPlayMacOSBridge {
 
         let args = Array(CommandLine.arguments.dropFirst())
         guard let command = args.first else {
-            throw BridgeError.usage("expected command: list | capture | press")
+            throw BridgeError.usage("expected command: list | capture | press | session")
         }
 
         switch command {
@@ -77,6 +120,13 @@ struct AgentPlayMacOSBridge {
                 keyCode: CGKeyCode(keyCode),
                 holdMillis: holdMillis
             )
+        case "session":
+            guard args.count == 4,
+                  let windowID = UInt32(args[1]),
+                  let pid = Int32(args[2]) else {
+                throw BridgeError.usage("usage: session <window-id> <pid> <bundle-id>")
+            }
+            try await runSession(windowID: windowID, pid: pid, bundleID: args[3])
         default:
             throw BridgeError.usage("unknown command \(command)")
         }
@@ -119,17 +169,58 @@ struct AgentPlayMacOSBridge {
 
     static func capture(windowID: UInt32, pid: Int32, bundleID: String) async throws {
         let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let configuration = SCStreamConfiguration()
-        configuration.width = max(1, Int(filter.contentRect.width * CGFloat(filter.pointPixelScale)))
-        configuration.height = max(1, Int(filter.contentRect.height * CGFloat(filter.pointPixelScale)))
-        configuration.showsCursor = false
+        let session = WindowSession(window: window, pid: pid)
+        FileHandle.standardOutput.write(try await session.capture())
+    }
 
-        let image = try await SCScreenshotManager.captureImage(
-            contentFilter: filter,
-            configuration: configuration
-        )
+    static func press(
+        windowID: UInt32,
+        pid: Int32,
+        bundleID: String,
+        keyCode: CGKeyCode,
+        holdMillis: UInt64
+    ) async throws {
+        let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
+        let session = WindowSession(window: window, pid: pid)
+        try await session.press(keyCode: keyCode, holdMillis: holdMillis)
+    }
 
+    static func runSession(windowID: UInt32, pid: Int32, bundleID: String) async throws {
+        let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
+        let session = WindowSession(window: window, pid: pid)
+        writeLine("READY")
+
+        while let line = readLine(strippingNewline: true) {
+            let fields = line.split(separator: " ")
+            guard let command = fields.first else { continue }
+
+            do {
+                switch command {
+                case "capture":
+                    guard fields.count == 1 else {
+                        throw BridgeError.usage("session capture takes no arguments")
+                    }
+                    let data = try await session.capture()
+                    writeLine("OK \(data.count)")
+                    FileHandle.standardOutput.write(data)
+                case "press":
+                    guard fields.count == 3,
+                          let keyCode = UInt16(fields[1]),
+                          let holdMillis = UInt64(fields[2]) else {
+                        throw BridgeError.usage("session press requires <key-code> <hold-ms>")
+                    }
+                    try await session.press(keyCode: CGKeyCode(keyCode), holdMillis: holdMillis)
+                    writeLine("OK")
+                default:
+                    throw BridgeError.usage("unknown session command \(command)")
+                }
+            } catch {
+                writeLine("ERR \(error)")
+            }
+        }
+    }
+
+    static func encodePNG(_ image: CGImage) throws -> Data {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(
             data,
@@ -143,33 +234,10 @@ struct AgentPlayMacOSBridge {
         guard CGImageDestinationFinalize(destination) else {
             throw BridgeError.screenshotEncodingFailed
         }
-        FileHandle.standardOutput.write(data as Data)
+        return data as Data
     }
 
-    static func press(
-        windowID: UInt32,
-        pid: Int32,
-        bundleID: String,
-        keyCode: CGKeyCode,
-        holdMillis: UInt64
-    ) async throws {
-        _ = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        let accessibilityOptions = [
-            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-        ] as CFDictionary
-        guard AXIsProcessTrustedWithOptions(accessibilityOptions) else {
-            throw BridgeError.accessibilityPermissionMissing
-        }
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) else {
-            throw BridgeError.usage("failed to create CoreGraphics keyboard event")
-        }
-
-        down.postToPid(pid)
-        if holdMillis > 0 {
-            try await Task.sleep(for: .milliseconds(holdMillis))
-        }
-        up.postToPid(pid)
+    static func writeLine(_ value: String) {
+        FileHandle.standardOutput.write(Data("\(value)\n".utf8))
     }
 }
