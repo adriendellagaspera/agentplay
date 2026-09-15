@@ -446,7 +446,7 @@ mod tests {
             },
         };
 
-        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), frame)
+        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
             .await
             .unwrap();
 
@@ -467,7 +467,7 @@ mod tests {
             },
         };
 
-        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), frame)
+        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
             .await
             .unwrap();
 
