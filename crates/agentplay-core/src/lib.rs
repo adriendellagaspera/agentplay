@@ -91,7 +91,7 @@ impl From<Action> for Decision {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TemporalPolicy {
     FixedDelay { millis: u64 },
-    UntilQuiescent(QuiescencePolicy),
+    StepBoundary(StepBoundaryPolicy),
     FrozenStep { millis: u64 },
     Manual,
 }
@@ -100,7 +100,6 @@ pub enum TemporalPolicy {
 pub struct QuiescencePolicy {
     pub sample_every_millis: u64,
     pub stable_for_millis: u64,
-    pub max_wait_millis: u64,
     pub difference_threshold: u32,
     pub max_cycle_frames: usize,
 }
@@ -110,10 +109,45 @@ impl Default for QuiescencePolicy {
         Self {
             sample_every_millis: 50,
             stable_for_millis: 200,
-            max_wait_millis: 2_000,
             difference_threshold: 100,
             max_cycle_frames: 4,
         }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepBoundaryPolicy {
+    pub min_wait_millis: u64,
+    pub timeout_millis: u64,
+    pub settle: QuiescencePolicy,
+}
+
+impl Default for StepBoundaryPolicy {
+    fn default() -> Self {
+        Self {
+            min_wait_millis: 0,
+            timeout_millis: 2_000,
+            settle: QuiescencePolicy::default(),
+        }
+    }
+}
+
+impl StepBoundaryPolicy {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(self.timeout_millis > 0, "step timeout must be positive");
+        anyhow::ensure!(
+            self.min_wait_millis <= self.timeout_millis,
+            "step minimum wait must not exceed step timeout"
+        );
+        anyhow::ensure!(
+            self.settle.sample_every_millis > 0,
+            "sample interval must be positive"
+        );
+        anyhow::ensure!(
+            self.settle.max_cycle_frames > 0,
+            "maximum cycle length must be greater than zero"
+        );
+        Ok(())
     }
 }
 
@@ -179,5 +213,23 @@ mod tests {
         .with_inter_action_delay(Duration::from_millis(25));
 
         assert_eq!(decision.inter_action_delay_millis, 25);
+    }
+
+    #[test]
+    fn step_boundary_defaults_preserve_current_timing() {
+        let policy = StepBoundaryPolicy::default();
+        assert_eq!(policy.min_wait_millis, 0);
+        assert_eq!(policy.timeout_millis, 2_000);
+        assert_eq!(policy.settle, QuiescencePolicy::default());
+    }
+
+    #[test]
+    fn step_boundary_rejects_minimum_beyond_timeout() {
+        let policy = StepBoundaryPolicy {
+            min_wait_millis: 3_000,
+            timeout_millis: 2_000,
+            ..StepBoundaryPolicy::default()
+        };
+        assert!(policy.validate().is_err());
     }
 }
