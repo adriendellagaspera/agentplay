@@ -1,4 +1,4 @@
-use agentplay_core::Key;
+use agentplay_core::{Action, Key};
 #[cfg(target_os = "macos")]
 use anyhow::{Context, ensure};
 use clap::{Args, Parser, Subcommand};
@@ -79,6 +79,29 @@ fn parse_key(value: &str) -> Result<Key, String> {
     }
 }
 
+fn parse_actions(line: &str) -> anyhow::Result<Vec<Action>> {
+    let mut actions = Vec::new();
+    for token in line.split_whitespace() {
+        let (key_token, count) = match token.rsplit_once('*') {
+            Some((key, count)) => {
+                let count = count
+                    .parse::<usize>()
+                    .map_err(|_| anyhow::anyhow!("invalid repetition count in {token:?}"))?;
+                anyhow::ensure!(count > 0, "repetition count must be greater than zero");
+                (key, count)
+            }
+            None => (token, 1),
+        };
+        let key = parse_key(key_token).map_err(anyhow::Error::msg)?;
+        actions.extend(std::iter::repeat_n(Action::KeyPress(key), count));
+    }
+    anyhow::ensure!(
+        !actions.is_empty(),
+        "Decision must contain at least one Action"
+    );
+    Ok(actions)
+}
+
 #[cfg(not(target_os = "macos"))]
 async fn run_human(_args: HumanArgs) -> anyhow::Result<()> {
     anyhow::bail!("the native human-through-runtime path is currently implemented only on macOS")
@@ -86,7 +109,7 @@ async fn run_human(_args: HumanArgs) -> anyhow::Result<()> {
 
 #[cfg(target_os = "macos")]
 async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
-    use agentplay_core::{Action, Decision, QuiescencePolicy};
+    use agentplay_core::{Decision, QuiescencePolicy};
     use agentplay_platform_macos::{
         CaptureBackend, InputBackend, InputPolicy, MacOsBackend, WindowSelector,
     };
@@ -208,29 +231,6 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         );
     }
 
-    fn parse_actions(line: &str) -> anyhow::Result<Vec<Action>> {
-        let mut actions = Vec::new();
-        for token in line.split_whitespace() {
-            let (key_token, count) = match token.rsplit_once('*') {
-                Some((key, count)) => {
-                    let count = count
-                        .parse::<usize>()
-                        .with_context(|| format!("invalid repetition count in {token:?}"))?;
-                    ensure!(count > 0, "repetition count must be greater than zero");
-                    (key, count)
-                }
-                None => (token, 1),
-            };
-            let key = parse_key(key_token).map_err(anyhow::Error::msg)?;
-            actions.extend(std::iter::repeat_n(Action::KeyPress(key), count));
-        }
-        ensure!(
-            !actions.is_empty(),
-            "Decision must contain at least one Action"
-        );
-        Ok(actions)
-    }
-
     fn default_record_dir() -> PathBuf {
         let millis = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -295,4 +295,34 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_one_line_as_one_ordered_action_batch() {
+        assert_eq!(
+            parse_actions("right right up").unwrap(),
+            vec![
+                Action::KeyPress(Key::Right),
+                Action::KeyPress(Key::Right),
+                Action::KeyPress(Key::Up),
+            ]
+        );
+    }
+
+    #[test]
+    fn expands_repeated_physical_input() {
+        assert_eq!(
+            parse_actions("space*3").unwrap(),
+            vec![Action::KeyPress(Key::Space); 3]
+        );
+    }
+
+    #[test]
+    fn rejects_zero_repetition() {
+        assert!(parse_actions("space*0").is_err());
+    }
 }
