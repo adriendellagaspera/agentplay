@@ -195,6 +195,8 @@ pub struct QuiescenceResult {
 }
 
 /// Samples a fresh post-Decision visual history until it becomes recurrent/stable or times out.
+/// `sample_every_millis` is the minimum start-to-start interval between samples. Capture time counts
+/// toward that interval instead of being followed by an unconditional additional sleep.
 pub async fn settle_until_quiescent<M, C>(
     policy: QuiescencePolicy,
     metric: M,
@@ -209,11 +211,17 @@ where
     let mut detector = QuiescenceDetector::new(policy, metric)?;
 
     loop {
+        let sample_started = Instant::now();
         let frame = capture()?;
         let elapsed_millis = started.elapsed().as_millis() as u64;
 
         match detector.push(frame.clone(), elapsed_millis)? {
-            Detection::Waiting => tokio::time::sleep(sample_every).await,
+            Detection::Waiting => {
+                let remaining = sample_every.saturating_sub(sample_started.elapsed());
+                if !remaining.is_zero() {
+                    tokio::time::sleep(remaining).await;
+                }
+            }
             Detection::Settled(diagnostics) => {
                 return Ok(QuiescenceResult { frame, diagnostics });
             }

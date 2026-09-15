@@ -18,6 +18,7 @@ fn main() {
         .args(["-framework", "CoreGraphics"])
         .args(["-framework", "ImageIO"])
         .args(["-framework", "ApplicationServices"])
+        .args(["-framework", "AppKit"])
         .arg("-o")
         .arg(&output)
         .status()
