@@ -1,6 +1,6 @@
-use agentplay_core::Key;
 #[cfg(any(target_os = "macos", test))]
 use agentplay_core::Action;
+use agentplay_core::Key;
 #[cfg(target_os = "macos")]
 use anyhow::{Context, ensure};
 use clap::{Args, Parser, Subcommand};
