@@ -162,9 +162,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_waits_are_forwarded_as_one_environment_step() {
+    async fn repeated_key_presses_are_forwarded_as_one_environment_step() {
         let decisions = Arc::new(Mutex::new(Vec::new()));
-        let decision = Decision::repeat(Action::Wait, 10).unwrap();
+        let decision = Decision::repeat(Action::KeyPress(Key::Space), 10).unwrap();
 
         let runner = Runner::new(
             RecordingEnvironment {
@@ -211,13 +211,14 @@ mod tests {
         }
 
         let mut state = State::default();
-        let decision = Decision::repeat(Action::Wait, 3).unwrap();
+        let action = Action::KeyPress(Key::Space);
+        let decision = Decision::repeat(action.clone(), 3).unwrap();
 
         let result = step_decision(
             &mut state,
             &decision,
-            |state, action| {
-                assert_eq!(action, &Action::Wait);
+            |state, applied| {
+                assert_eq!(applied, &action);
                 state.events.push("action");
                 Ok(())
             },
@@ -246,7 +247,7 @@ mod tests {
         }
 
         let mut state = State::default();
-        let decision = Decision::wait();
+        let decision = Decision::press(Key::Space);
 
         for _ in 0..2 {
             let result = step_decision(

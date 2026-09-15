@@ -23,6 +23,8 @@ visual observations in
 player-equivalent inputs out
 ```
 
+`Action` values describe player-equivalent peripheral interactions, not semantic game actions such as passing a turn.
+
 Private evaluator state may exist for scoring and reproducibility, but it must not leak across the agent boundary.
 
 ### Non-realtime by design
@@ -51,7 +53,7 @@ The first end-to-end target is **Baba Is You** on macOS:
 1. launch or attach to the real game;
 2. capture only the game surface;
 3. expose only controls available to a normal player, minus controls that can escape the sandbox;
-4. wait for a stable/actionable state after each input;
+4. wait for a stable/actionable state after each Decision;
 5. record the exact observations and actions;
 6. let a multimodal agent start from a fresh save and figure everything else out.
 
