@@ -296,11 +296,7 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         let title = window.title.as_deref().unwrap_or("<untitled>");
         format!(
             "{} — {}  [pid {}, window {}, {}]",
-            window.application_name,
-            title,
-            window.pid,
-            window.window_id,
-            window.bundle_identifier
+            window.application_name, title, window.pid, window.window_id, window.bundle_identifier
         )
     }
 
