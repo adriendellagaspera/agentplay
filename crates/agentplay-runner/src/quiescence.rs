@@ -446,9 +446,10 @@ mod tests {
             },
         };
 
-        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
-            .await
-            .unwrap();
+        let result =
+            wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
+                .await
+                .unwrap();
 
         assert_eq!(result.diagnostics.reason, SettleReason::Stable);
         assert!(result.diagnostics.elapsed_millis >= 10);
@@ -467,9 +468,10 @@ mod tests {
             },
         };
 
-        let result = wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
-            .await
-            .unwrap();
+        let result =
+            wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
+                .await
+                .unwrap();
 
         assert_eq!(result.diagnostics.reason, SettleReason::Timeout);
         assert!(result.diagnostics.elapsed_millis >= 10);
