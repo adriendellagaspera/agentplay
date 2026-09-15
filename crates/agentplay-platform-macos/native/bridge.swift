@@ -26,7 +26,7 @@ enum BridgeError: Error, CustomStringConvertible {
         case .targetNotFound(let id): return "window \(id) was not found on screen"
         case .targetIdentityChanged: return "target window identity changed; refusing operation"
         case .accessibilityPermissionMissing:
-            return "macOS Accessibility permission is required for keyboard input"
+            return "macOS Accessibility permission is required for keyboard input; grant it to the terminal running AgentPlay and retry"
         case .screenshotEncodingFailed: return "failed to encode screenshot as PNG"
         }
     }
@@ -154,7 +154,10 @@ struct AgentPlayMacOSBridge {
         holdMillis: UInt64
     ) async throws {
         _ = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        guard AXIsProcessTrusted() else {
+        let accessibilityOptions = [
+            kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+        ] as CFDictionary
+        guard AXIsProcessTrustedWithOptions(accessibilityOptions) else {
             throw BridgeError.accessibilityPermissionMissing
         }
         guard let source = CGEventSource(stateID: .hidSystemState),
