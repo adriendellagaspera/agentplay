@@ -9,7 +9,7 @@ fn main() -> anyhow::Result<()> {
     use agentplay_core::Key;
     use agentplay_platform::{CaptureBackend, InputBackend};
     use agentplay_platform_macos::{InputPolicy, MacOsBackend, WindowSelector, list_windows};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn exact_selector(window_id: &str, pid: &str, bundle: &str) -> anyhow::Result<WindowSelector> {
         Ok(WindowSelector {
@@ -59,6 +59,26 @@ fn main() -> anyhow::Result<()> {
                 frame.width, frame.height
             );
         }
+        [command, window_id, pid, bundle, count] if command == "burst" => {
+            let count: usize = count.parse()?;
+            anyhow::ensure!(count > 0, "capture count must be positive");
+            let selector = exact_selector(window_id, pid, bundle)?;
+            let mut backend = MacOsBackend::attach(&selector, InputPolicy::capture_only())?;
+            let started = Instant::now();
+            let mut last = None;
+            for _ in 0..count {
+                last = Some(backend.capture()?);
+            }
+            let elapsed = started.elapsed();
+            let frame = last.expect("positive capture count");
+            println!(
+                "captured {count} frames at {}x{} in {} ms ({:.1} ms/frame)",
+                frame.width,
+                frame.height,
+                elapsed.as_millis(),
+                elapsed.as_secs_f64() * 1000.0 / count as f64
+            );
+        }
         [command, window_id, pid, bundle, key] if command == "press" => {
             let key = parse_key(key)?;
             let selector = exact_selector(window_id, pid, bundle)?;
@@ -68,7 +88,7 @@ fn main() -> anyhow::Result<()> {
             println!("sent {key:?} to validated target");
         }
         _ => anyhow::bail!(
-            "usage:\n  macos_probe list\n  macos_probe capture <window-id> <pid> <bundle-id>\n  macos_probe press <window-id> <pid> <bundle-id> <key>"
+            "usage:\n  macos_probe list\n  macos_probe capture <window-id> <pid> <bundle-id>\n  macos_probe burst <window-id> <pid> <bundle-id> <count>\n  macos_probe press <window-id> <pid> <bundle-id> <key>"
         ),
     }
     Ok(())
