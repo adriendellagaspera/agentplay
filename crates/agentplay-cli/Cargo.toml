@@ -24,3 +24,4 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 agentplay-platform-macos = { path = "../agentplay-platform-macos" }
+dialoguer = { version = "0.12", default-features = false }

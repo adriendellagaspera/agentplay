@@ -12,20 +12,11 @@ fn main() -> anyhow::Result<()> {
     use std::time::Duration;
 
     fn exact_selector(window_id: &str, pid: &str, bundle: &str) -> anyhow::Result<WindowSelector> {
-        let window_id: u32 = window_id.parse()?;
-        let pid: i32 = pid.parse()?;
-        let matched = list_windows()?
-            .into_iter()
-            .find(|window| {
-                window.window_id == window_id
-                    && window.pid == pid
-                    && window.bundle_identifier == bundle
-            })
-            .ok_or_else(|| anyhow::anyhow!("exact target window was not found"))?;
         Ok(WindowSelector {
-            pid: Some(matched.pid),
-            bundle_identifier: Some(matched.bundle_identifier),
-            title_contains: matched.title,
+            window_id: Some(window_id.parse()?),
+            pid: Some(pid.parse()?),
+            bundle_identifier: Some(bundle.to_owned()),
+            title_contains: None,
         })
     }
 

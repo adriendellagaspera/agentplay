@@ -9,6 +9,7 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct WindowSelector {
+    pub window_id: Option<u32>,
     pub pid: Option<i32>,
     pub bundle_identifier: Option<String>,
     pub title_contains: Option<String>,
@@ -17,7 +18,10 @@ pub struct WindowSelector {
 impl WindowSelector {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.pid.is_some() || self.bundle_identifier.is_some() || self.title_contains.is_some(),
+            self.window_id.is_some()
+                || self.pid.is_some()
+                || self.bundle_identifier.is_some()
+                || self.title_contains.is_some(),
             "window selector must specify at least one constraint"
         );
         if let Some(bundle) = &self.bundle_identifier {
@@ -30,7 +34,9 @@ impl WindowSelector {
     }
 
     fn matches(&self, window: &WindowInfo) -> bool {
-        self.pid.is_none_or(|pid| window.pid == pid)
+        self.window_id
+            .is_none_or(|window_id| window.window_id == window_id)
+            && self.pid.is_none_or(|pid| window.pid == pid)
             && self
                 .bundle_identifier
                 .as_deref()
@@ -115,8 +121,12 @@ impl MacOsBackend {
                     .iter()
                     .map(|window| {
                         format!(
-                            "window={} pid={} app={:?} title={:?}",
-                            window.window_id, window.pid, window.application_name, window.title
+                            "window={} pid={} app={:?} bundle={:?} title={:?}",
+                            window.window_id,
+                            window.pid,
+                            window.application_name,
+                            window.bundle_identifier,
+                            window.title
                         )
                     })
                     .collect::<Vec<_>>()
@@ -352,12 +362,25 @@ mod tests {
     #[test]
     fn selector_matches_all_supplied_constraints() {
         let selector = WindowSelector {
+            window_id: Some(42),
             pid: Some(7),
             bundle_identifier: Some("org.example.game".into()),
             title_contains: Some("Baba".into()),
         };
         assert!(selector.matches(&window(7, "org.example.game", Some("Baba Is You"))));
         assert!(!selector.matches(&window(8, "org.example.game", Some("Baba Is You"))));
+    }
+
+    #[test]
+    fn selector_can_target_exact_window_id() {
+        let selector = WindowSelector {
+            window_id: Some(42),
+            ..WindowSelector::default()
+        };
+        assert!(selector.matches(&window(7, "org.example.game", Some("Baba Is You"))));
+        let mut other = window(7, "org.example.game", Some("Baba Is You"));
+        other.window_id = 43;
+        assert!(!selector.matches(&other));
     }
 
     #[test]

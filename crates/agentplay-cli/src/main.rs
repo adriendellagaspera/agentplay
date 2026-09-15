@@ -28,9 +28,21 @@ enum Command {
 
 #[derive(Args)]
 struct HumanArgs {
-    /// Substring that must uniquely match the target window title.
+    /// Exact native window id. If no target selector is supplied, AgentPlay opens a window picker.
     #[arg(long)]
-    title: String,
+    window_id: Option<u32>,
+
+    /// PID that must own the target window.
+    #[arg(long)]
+    pid: Option<i32>,
+
+    /// Bundle identifier that must own the target window.
+    #[arg(long = "bundle-id")]
+    bundle_identifier: Option<String>,
+
+    /// Substring that must match the target window title.
+    #[arg(long)]
+    title: Option<String>,
 
     /// Physical keys the runtime is allowed to send, comma-separated.
     #[arg(long = "allow", value_delimiter = ',', value_parser = parse_key)]
@@ -114,12 +126,14 @@ async fn run_human(_args: HumanArgs) -> anyhow::Result<()> {
 async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     use agentplay_core::{Decision, QuiescencePolicy};
     use agentplay_platform_macos::{
-        CaptureBackend, InputBackend, InputPolicy, MacOsBackend, WindowSelector,
+        CaptureBackend, InputBackend, InputPolicy, MacOsBackend, WindowInfo, WindowSelector,
+        list_windows,
     };
     use agentplay_runner::{
         quiescence::{BlockDifferenceMetric, QuiescenceDiagnostics, settle_until_quiescent},
         step_decision,
     };
+    use dialoguer::Select;
     use serde::Serialize;
     use std::fs::{self, File};
     use std::io::{self, BufWriter, Write};
@@ -130,11 +144,27 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         "at least one --allow key is required"
     );
 
-    let selector = WindowSelector {
-        pid: None,
-        bundle_identifier: None,
-        title_contains: Some(args.title.clone()),
+    let selector = if args.window_id.is_some()
+        || args.pid.is_some()
+        || args.bundle_identifier.is_some()
+        || args.title.is_some()
+    {
+        WindowSelector {
+            window_id: args.window_id,
+            pid: args.pid,
+            bundle_identifier: args.bundle_identifier.clone(),
+            title_contains: args.title.clone(),
+        }
+    } else {
+        let window = choose_window()?;
+        WindowSelector {
+            window_id: Some(window.window_id),
+            pid: Some(window.pid),
+            bundle_identifier: Some(window.bundle_identifier),
+            title_contains: None,
+        }
     };
+
     let input_policy = InputPolicy::new(args.allowed_keys.clone(), Duration::from_millis(20))?;
     let mut backend = MacOsBackend::attach(&selector, input_policy)?;
     let target = backend.target()?;
@@ -145,7 +175,10 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
 
     #[derive(Serialize)]
     struct Manifest<'a> {
-        title_selector: &'a str,
+        window_id_selector: Option<u32>,
+        pid_selector: Option<i32>,
+        bundle_identifier_selector: Option<&'a str>,
+        title_selector: Option<&'a str>,
         window_id: u32,
         pid: i32,
         bundle_identifier: &'a str,
@@ -156,7 +189,10 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     write_json(
         record_dir.join("manifest.json"),
         &Manifest {
-            title_selector: &args.title,
+            window_id_selector: selector.window_id,
+            pid_selector: selector.pid,
+            bundle_identifier_selector: selector.bundle_identifier.as_deref(),
+            title_selector: selector.title_contains.as_deref(),
             window_id: target.window_id,
             pid: target.pid,
             bundle_identifier: &target.bundle_identifier,
@@ -232,6 +268,36 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
             result.diagnostics.elapsed_millis,
             result.diagnostics.samples
         );
+    }
+
+    fn choose_window() -> anyhow::Result<WindowInfo> {
+        let mut windows = list_windows()?;
+        ensure!(!windows.is_empty(), "no on-screen windows are available");
+        windows.sort_by(|left, right| {
+            left.application_name
+                .cmp(&right.application_name)
+                .then_with(|| left.title.cmp(&right.title))
+                .then_with(|| left.window_id.cmp(&right.window_id))
+        });
+
+        let labels = windows.iter().map(window_label).collect::<Vec<_>>();
+        let selection = Select::new()
+            .with_prompt("Select target window (↑/↓, Enter; Esc/q to cancel)")
+            .items(&labels)
+            .default(0)
+            .max_length(15)
+            .interact_opt()
+            .context("selecting target window")?
+            .ok_or_else(|| anyhow::anyhow!("window selection cancelled"))?;
+        Ok(windows.remove(selection))
+    }
+
+    fn window_label(window: &WindowInfo) -> String {
+        let title = window.title.as_deref().unwrap_or("<untitled>");
+        format!(
+            "{} — {}  [pid {}, window {}, {}]",
+            window.application_name, title, window.pid, window.window_id, window.bundle_identifier
+        )
     }
 
     fn default_record_dir() -> PathBuf {
