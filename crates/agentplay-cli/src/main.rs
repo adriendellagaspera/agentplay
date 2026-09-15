@@ -1,4 +1,5 @@
 use agentplay_core::Key;
+#[cfg(target_os = "macos")]
 use anyhow::{Context, ensure};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
@@ -145,7 +146,9 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         target.window_id,
         record_dir.display()
     );
-    println!("one line = one Decision; examples: `right`, `right right up`, `space*10`; `quit` exits");
+    println!(
+        "one line = one Decision; examples: `right`, `right right up`, `space*10`; `quit` exits"
+    );
 
     let initial = settle_until_quiescent(
         settle_policy.clone(),
@@ -153,13 +156,7 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         || backend.capture(),
     )
     .await?;
-    record_observation(
-        &record_dir,
-        0,
-        &initial.frame,
-        None,
-        &initial.diagnostics,
-    )?;
+    record_observation(&record_dir, 0, &initial.frame, None, &initial.diagnostics)?;
 
     let stdin = io::stdin();
     let mut line = String::new();
@@ -227,7 +224,10 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
             let key = parse_key(key_token).map_err(anyhow::Error::msg)?;
             actions.extend(std::iter::repeat_n(Action::KeyPress(key), count));
         }
-        ensure!(!actions.is_empty(), "Decision must contain at least one Action");
+        ensure!(
+            !actions.is_empty(),
+            "Decision must contain at least one Action"
+        );
         Ok(actions)
     }
 
@@ -275,8 +275,8 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     }
 
     fn write_png(path: PathBuf, frame: &agentplay_core::Frame) -> anyhow::Result<()> {
-        let file = File::create(&path)
-            .with_context(|| format!("creating frame {}", path.display()))?;
+        let file =
+            File::create(&path).with_context(|| format!("creating frame {}", path.display()))?;
         let mut encoder = png::Encoder::new(BufWriter::new(file), frame.width, frame.height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
@@ -288,8 +288,8 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     }
 
     fn write_json(path: PathBuf, value: &impl Serialize) -> anyhow::Result<()> {
-        let file = File::create(&path)
-            .with_context(|| format!("creating metadata {}", path.display()))?;
+        let file =
+            File::create(&path).with_context(|| format!("creating metadata {}", path.display()))?;
         serde_json::to_writer_pretty(BufWriter::new(file), value)
             .with_context(|| format!("writing metadata {}", path.display()))
     }
