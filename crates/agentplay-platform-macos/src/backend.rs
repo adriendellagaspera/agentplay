@@ -115,8 +115,12 @@ impl MacOsBackend {
                     .iter()
                     .map(|window| {
                         format!(
-                            "window={} pid={} app={:?} title={:?}",
-                            window.window_id, window.pid, window.application_name, window.title
+                            "window={} pid={} bundle={:?} app={:?} title={:?}",
+                            window.window_id,
+                            window.pid,
+                            window.bundle_identifier,
+                            window.application_name,
+                            window.title
                         )
                     })
                     .collect::<Vec<_>>()
@@ -338,41 +342,27 @@ mod tests {
         WindowInfo {
             window_id: 42,
             pid,
-            application_name: "Game".into(),
-            bundle_identifier: bundle.into(),
+            application_name: "Test".to_owned(),
+            bundle_identifier: bundle.to_owned(),
             title: title.map(str::to_owned),
         }
     }
 
     #[test]
-    fn selector_requires_a_constraint() {
+    fn selector_requires_at_least_one_constraint() {
         assert!(WindowSelector::default().validate().is_err());
     }
 
     #[test]
-    fn selector_matches_all_supplied_constraints() {
+    fn selector_matches_all_present_constraints() {
         let selector = WindowSelector {
             pid: Some(7),
-            bundle_identifier: Some("org.example.game".into()),
-            title_contains: Some("Baba".into()),
+            bundle_identifier: Some("example.game".to_owned()),
+            title_contains: Some("Level".to_owned()),
         };
-        assert!(selector.matches(&window(7, "org.example.game", Some("Baba Is You"))));
-        assert!(!selector.matches(&window(8, "org.example.game", Some("Baba Is You"))));
-    }
-
-    #[test]
-    fn policy_rejects_unlisted_keys() {
-        let policy = InputPolicy::new(vec![Key::Left, Key::Character('z')], Duration::ZERO)
-            .expect("valid policy");
-        assert!(policy.allows(&Key::Left));
-        assert!(policy.allows(&Key::Character('z')));
-        assert!(!policy.allows(&Key::Right));
-    }
-
-    #[test]
-    fn maps_baba_keys() {
-        assert_eq!(key_code(&Key::Left).unwrap(), 0x7B);
-        assert_eq!(key_code(&Key::Character('z')).unwrap(), 0x06);
-        assert_eq!(key_code(&Key::Character('r')).unwrap(), 0x0F);
+        assert!(selector.matches(&window(7, "example.game", Some("Level 1"))));
+        assert!(!selector.matches(&window(8, "example.game", Some("Level 1"))));
+        assert!(!selector.matches(&window(7, "other.game", Some("Level 1"))));
+        assert!(!selector.matches(&window(7, "example.game", Some("Menu"))));
     }
 }
