@@ -59,6 +59,8 @@ The first end-to-end target is **Baba Is You** on macOS:
 
 The game itself remains a black box to the agent.
 
+On macOS, native capture and synthesized keyboard input are protected by system privacy controls. Grant the terminal running AgentPlay screen-capture access when macOS requests it. Keyboard input additionally requires Accessibility permission; AgentPlay triggers the macOS Accessibility prompt on the first attempted key press when that permission is missing. After granting it, relaunch the terminal if macOS does not apply the permission to the existing process.
+
 ## Architecture direction
 
 ```text
