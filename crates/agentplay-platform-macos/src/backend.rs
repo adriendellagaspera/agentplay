@@ -159,7 +159,10 @@ impl BridgeSession {
         if let Some(message) = response.strip_prefix("ERR ") {
             bail!("macOS native session: {message}");
         }
-        ensure!(response == "OK", "invalid macOS input response {response:?}");
+        ensure!(
+            response == "OK",
+            "invalid macOS input response {response:?}"
+        );
         Ok(())
     }
 
