@@ -237,11 +237,9 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         min_wait_millis: 0,
         ..step_boundary.clone()
     };
-    let initial = wait_for_step_boundary(
-        initial_policy,
-        BlockDifferenceMetric::default(),
-        || backend.capture(),
-    )
+    let initial = wait_for_step_boundary(initial_policy, BlockDifferenceMetric::default(), || {
+        backend.capture()
+    })
     .await?;
     record_observation(&record_dir, 0, &initial.frame, None, &initial.diagnostics)?;
 
