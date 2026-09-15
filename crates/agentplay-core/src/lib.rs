@@ -112,7 +112,7 @@ impl Default for QuiescencePolicy {
             stable_for_millis: 200,
             max_wait_millis: 2_000,
             difference_threshold: 100,
-            max_cycle_frames: 4,
+            max_cycle_frames: 8,
         }
     }
 }
@@ -179,5 +179,10 @@ mod tests {
         .with_inter_action_delay(Duration::from_millis(25));
 
         assert_eq!(decision.inter_action_delay_millis, 25);
+    }
+
+    #[test]
+    fn quiescence_default_keeps_multi_sample_cycle_history() {
+        assert_eq!(QuiescencePolicy::default().max_cycle_frames, 8);
     }
 }
