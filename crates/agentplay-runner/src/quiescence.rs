@@ -1,5 +1,6 @@
 use agentplay_core::{Frame, QuiescencePolicy};
 use anyhow::ensure;
+use serde::Serialize;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -79,13 +80,13 @@ impl FrameDifferenceMetric for BlockDifferenceMetric {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum SettleReason {
     Stable,
     Timeout,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct QuiescenceDiagnostics {
     pub reason: SettleReason,
     pub elapsed_millis: u64,
