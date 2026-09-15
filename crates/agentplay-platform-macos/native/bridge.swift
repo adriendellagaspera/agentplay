@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Darwin
@@ -33,12 +34,16 @@ enum BridgeError: Error, CustomStringConvertible {
 }
 
 final class WindowSession {
+    let windowID: UInt32
     let pid: Int32
+    let bundleID: String
     let filter: SCContentFilter
     let configuration: SCStreamConfiguration
 
-    init(window: SCWindow, pid: Int32) {
+    init(window: SCWindow, pid: Int32, bundleID: String) {
+        windowID = window.windowID
         self.pid = pid
+        self.bundleID = bundleID
         filter = SCContentFilter(desktopIndependentWindow: window)
         configuration = SCStreamConfiguration()
         configuration.width = max(1, Int(filter.contentRect.width * CGFloat(filter.pointPixelScale)))
@@ -46,7 +51,24 @@ final class WindowSession {
         configuration.showsCursor = false
     }
 
+    func validateLiveTarget() throws {
+        guard let records = CGWindowListCopyWindowInfo(
+            .optionIncludingWindow,
+            CGWindowID(windowID)
+        ) as? [[String: Any]],
+              let record = records.first else {
+            throw BridgeError.targetNotFound(windowID)
+        }
+        guard let owner = record[kCGWindowOwnerPID as String] as? NSNumber,
+              owner.int32Value == pid,
+              let app = NSRunningApplication(processIdentifier: pid),
+              app.bundleIdentifier == bundleID else {
+            throw BridgeError.targetIdentityChanged
+        }
+    }
+
     func capture() async throws -> Data {
+        try validateLiveTarget()
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: filter,
             configuration: configuration
@@ -55,6 +77,7 @@ final class WindowSession {
     }
 
     func press(keyCode: CGKeyCode, holdMillis: UInt64) async throws {
+        try validateLiveTarget()
         let accessibilityOptions = [
             kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
         ] as CFDictionary
@@ -169,7 +192,7 @@ struct AgentPlayMacOSBridge {
 
     static func capture(windowID: UInt32, pid: Int32, bundleID: String) async throws {
         let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        let session = WindowSession(window: window, pid: pid)
+        let session = WindowSession(window: window, pid: pid, bundleID: bundleID)
         FileHandle.standardOutput.write(try await session.capture())
     }
 
@@ -181,13 +204,13 @@ struct AgentPlayMacOSBridge {
         holdMillis: UInt64
     ) async throws {
         let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        let session = WindowSession(window: window, pid: pid)
+        let session = WindowSession(window: window, pid: pid, bundleID: bundleID)
         try await session.press(keyCode: keyCode, holdMillis: holdMillis)
     }
 
     static func runSession(windowID: UInt32, pid: Int32, bundleID: String) async throws {
         let window = try await validatedWindow(windowID: windowID, pid: pid, bundleID: bundleID)
-        let session = WindowSession(window: window, pid: pid)
+        let session = WindowSession(window: window, pid: pid, bundleID: bundleID)
         writeLine("READY")
 
         while let line = readLine(strippingNewline: true) {
