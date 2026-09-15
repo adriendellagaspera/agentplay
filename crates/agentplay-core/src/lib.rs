@@ -29,7 +29,6 @@ pub enum Key {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     KeyPress(Key),
-    Wait,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,10 +58,6 @@ impl Decision {
 
     pub fn press(key: Key) -> Self {
         Self::single(Action::KeyPress(key))
-    }
-
-    pub fn wait() -> Self {
-        Self::single(Action::Wait)
     }
 
     pub fn repeat(action: Action, count: usize) -> anyhow::Result<Self> {
@@ -158,14 +153,10 @@ mod tests {
     }
 
     #[test]
-    fn wait_helper_is_a_single_action_decision() {
-        assert_eq!(Decision::wait().actions, vec![Action::Wait]);
-    }
-
-    #[test]
-    fn repeated_waits_remain_one_decision() {
-        let decision = Decision::repeat(Action::Wait, 10).unwrap();
-        assert_eq!(decision.actions, vec![Action::Wait; 10]);
+    fn repeated_key_presses_remain_one_decision() {
+        let action = Action::KeyPress(Key::Space);
+        let decision = Decision::repeat(action.clone(), 10).unwrap();
+        assert_eq!(decision.actions, vec![action; 10]);
     }
 
     #[test]
@@ -175,7 +166,7 @@ mod tests {
 
     #[test]
     fn zero_repetition_is_rejected() {
-        assert!(Decision::repeat(Action::Wait, 0).is_err());
+        assert!(Decision::repeat(Action::KeyPress(Key::Space), 0).is_err());
     }
 
     #[test]
