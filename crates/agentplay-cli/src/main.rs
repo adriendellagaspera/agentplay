@@ -28,9 +28,17 @@ enum Command {
 
 #[derive(Args)]
 struct HumanArgs {
-    /// Substring that must uniquely match the target window title.
+    /// Substring that must match the target window title.
     #[arg(long)]
-    title: String,
+    title: Option<String>,
+
+    /// PID that must own the target window.
+    #[arg(long)]
+    pid: Option<i32>,
+
+    /// Bundle identifier that must own the target window.
+    #[arg(long = "bundle-id")]
+    bundle_identifier: Option<String>,
 
     /// Physical keys the runtime is allowed to send, comma-separated.
     #[arg(long = "allow", value_delimiter = ',', value_parser = parse_key)]
@@ -126,14 +134,18 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     ensure!(
+        args.title.is_some() || args.pid.is_some() || args.bundle_identifier.is_some(),
+        "at least one target selector is required: --title, --pid, or --bundle-id"
+    );
+    ensure!(
         !args.allowed_keys.is_empty(),
         "at least one --allow key is required"
     );
 
     let selector = WindowSelector {
-        pid: None,
-        bundle_identifier: None,
-        title_contains: Some(args.title.clone()),
+        pid: args.pid,
+        bundle_identifier: args.bundle_identifier.clone(),
+        title_contains: args.title.clone(),
     };
     let input_policy = InputPolicy::new(args.allowed_keys.clone(), Duration::from_millis(20))?;
     let mut backend = MacOsBackend::attach(&selector, input_policy)?;
@@ -145,7 +157,9 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
 
     #[derive(Serialize)]
     struct Manifest<'a> {
-        title_selector: &'a str,
+        title_selector: Option<&'a str>,
+        pid_selector: Option<i32>,
+        bundle_identifier_selector: Option<&'a str>,
         window_id: u32,
         pid: i32,
         bundle_identifier: &'a str,
@@ -156,7 +170,9 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     write_json(
         record_dir.join("manifest.json"),
         &Manifest {
-            title_selector: &args.title,
+            title_selector: args.title.as_deref(),
+            pid_selector: args.pid,
+            bundle_identifier_selector: args.bundle_identifier.as_deref(),
             window_id: target.window_id,
             pid: target.pid,
             bundle_identifier: &target.bundle_identifier,
