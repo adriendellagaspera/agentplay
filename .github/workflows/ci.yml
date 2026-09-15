@@ -55,6 +55,8 @@ jobs:
           [[ -n "$MATCH" ]] || { echo 'TextEdit window not discovered' >&2; exit 1; }
           WINDOW_ID="$(printf '%s\n' "$MATCH" | sed -E 's/^window=([0-9]+).*/\1/')"
 
+          $PROBE burst "$WINDOW_ID" "$PID" com.apple.TextEdit 8
+
           $PROBE capture "$WINDOW_ID" "$PID" com.apple.TextEdit
           mv frame.rgba before.rgba
 
