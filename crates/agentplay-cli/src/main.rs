@@ -52,6 +52,14 @@ struct HumanArgs {
     #[arg(long, default_value_t = 0)]
     inter_action_ms: u64,
 
+    /// Minimum post-Decision horizon before the next Observation may be exposed.
+    #[arg(long = "step-min", value_name = "DURATION", value_parser = parse_duration_millis)]
+    step_min_millis: Option<u64>,
+
+    /// Safety timeout for reaching the next post-Decision step boundary.
+    #[arg(long = "step-timeout", value_name = "DURATION", value_parser = parse_duration_millis)]
+    step_timeout_millis: Option<u64>,
+
     /// Directory in which to record the model-visible trajectory.
     #[arg(long)]
     record_dir: Option<PathBuf>,
@@ -93,6 +101,11 @@ fn parse_key(value: &str) -> Result<Key, String> {
     }
 }
 
+fn parse_duration_millis(value: &str) -> Result<u64, String> {
+    let duration = humantime::parse_duration(value).map_err(|error| error.to_string())?;
+    u64::try_from(duration.as_millis()).map_err(|_| format!("duration {value:?} is too large"))
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn parse_actions(line: &str) -> anyhow::Result<Vec<Action>> {
     let mut actions = Vec::new();
@@ -124,13 +137,13 @@ async fn run_human(_args: HumanArgs) -> anyhow::Result<()> {
 
 #[cfg(target_os = "macos")]
 async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
-    use agentplay_core::{Decision, QuiescencePolicy};
+    use agentplay_core::{Decision, StepBoundaryPolicy};
     use agentplay_platform_macos::{
         CaptureBackend, InputBackend, InputPolicy, MacOsBackend, WindowInfo, WindowSelector,
         list_windows,
     };
     use agentplay_runner::{
-        quiescence::{BlockDifferenceMetric, QuiescenceDiagnostics, settle_until_quiescent},
+        quiescence::{BlockDifferenceMetric, QuiescenceDiagnostics, wait_for_step_boundary},
         step_decision,
     };
     use dialoguer::Select;
@@ -168,7 +181,15 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
     let input_policy = InputPolicy::new(args.allowed_keys.clone(), Duration::from_millis(20))?;
     let mut backend = MacOsBackend::attach(&selector, input_policy)?;
     let target = backend.target()?;
-    let settle_policy = QuiescencePolicy::default();
+    let mut step_boundary = StepBoundaryPolicy::default();
+    if let Some(step_min_millis) = args.step_min_millis {
+        step_boundary.min_wait_millis = step_min_millis;
+    }
+    if let Some(step_timeout_millis) = args.step_timeout_millis {
+        step_boundary.timeout_millis = step_timeout_millis;
+    }
+    step_boundary.validate()?;
+
     let record_dir = args.record_dir.unwrap_or_else(default_record_dir);
     fs::create_dir_all(&record_dir)
         .with_context(|| format!("creating recording directory {}", record_dir.display()))?;
@@ -183,7 +204,7 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         pid: i32,
         bundle_identifier: &'a str,
         allowed_keys: &'a [Key],
-        quiescence: &'a QuiescencePolicy,
+        step_boundary: &'a StepBoundaryPolicy,
     }
 
     write_json(
@@ -197,7 +218,7 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
             pid: target.pid,
             bundle_identifier: &target.bundle_identifier,
             allowed_keys: &args.allowed_keys,
-            quiescence: &settle_policy,
+            step_boundary: &step_boundary,
         },
     )?;
 
@@ -212,11 +233,13 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
         "one line = one Decision; examples: `right`, `right right up`, `space*10`; `quit` exits"
     );
 
-    let initial = settle_until_quiescent(
-        settle_policy.clone(),
-        BlockDifferenceMetric::default(),
-        || backend.capture(),
-    )
+    let initial_policy = StepBoundaryPolicy {
+        min_wait_millis: 0,
+        ..step_boundary.clone()
+    };
+    let initial = wait_for_step_boundary(initial_policy, BlockDifferenceMetric::default(), || {
+        backend.capture()
+    })
     .await?;
     record_observation(&record_dir, 0, &initial.frame, None, &initial.diagnostics)?;
 
@@ -249,7 +272,7 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
                 Action::KeyPress(key) => backend.press(key),
             },
             |backend| backend.capture(),
-            settle_policy.clone(),
+            step_boundary.clone(),
             BlockDifferenceMetric::default(),
         )
         .await?;
@@ -263,10 +286,11 @@ async fn run_human(args: HumanArgs) -> anyhow::Result<()> {
             &result.diagnostics,
         )?;
         println!(
-            "observation {sequence}: {:?} after {} ms / {} samples",
+            "observation {sequence}: {:?} after {} ms / {} samples / last difference {:?}",
             result.diagnostics.reason,
             result.diagnostics.elapsed_millis,
-            result.diagnostics.samples
+            result.diagnostics.samples,
+            result.diagnostics.last_difference
         );
     }
 
@@ -393,5 +417,11 @@ mod tests {
     #[test]
     fn rejects_zero_repetition() {
         assert!(parse_actions("space*0").is_err());
+    }
+
+    #[test]
+    fn parses_human_step_durations() {
+        assert_eq!(parse_duration_millis("250ms").unwrap(), 250);
+        assert_eq!(parse_duration_millis("5s").unwrap(), 5_000);
     }
 }

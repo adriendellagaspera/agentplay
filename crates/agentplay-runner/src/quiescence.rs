@@ -1,4 +1,4 @@
-use agentplay_core::{Frame, QuiescencePolicy};
+use agentplay_core::{Frame, QuiescencePolicy, StepBoundaryPolicy};
 use anyhow::ensure;
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -120,10 +120,6 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
             "sample interval must be positive"
         );
         ensure!(
-            policy.stable_for_millis <= policy.max_wait_millis,
-            "stable window must not exceed max wait"
-        );
-        ensure!(
             policy.max_cycle_frames > 0,
             "maximum cycle length must be greater than zero"
         );
@@ -150,32 +146,31 @@ impl<M: FrameDifferenceMetric> QuiescenceDetector<M> {
             .into_iter()
             .min();
 
-        if let Some(residual) = residual {
+        let stable = if let Some(residual) = residual {
             self.last_difference = Some(residual);
             if residual <= self.policy.difference_threshold {
                 let stable_since = self.stable_since_millis.get_or_insert(elapsed_millis);
-                if elapsed_millis.saturating_sub(*stable_since) >= self.policy.stable_for_millis {
-                    return Ok(Detection::Settled(
-                        self.diagnostics(SettleReason::Stable, elapsed_millis),
-                    ));
-                }
+                elapsed_millis.saturating_sub(*stable_since) >= self.policy.stable_for_millis
             } else {
                 self.stable_since_millis = None;
+                false
             }
-        }
+        } else {
+            false
+        };
 
         self.recent.push_back(frame);
         while self.recent.len() > self.policy.max_cycle_frames {
             self.recent.pop_front();
         }
 
-        if elapsed_millis >= self.policy.max_wait_millis {
-            return Ok(Detection::Settled(
-                self.diagnostics(SettleReason::Timeout, elapsed_millis),
-            ));
+        if stable {
+            Ok(Detection::Settled(
+                self.diagnostics(SettleReason::Stable, elapsed_millis),
+            ))
+        } else {
+            Ok(Detection::Waiting)
         }
-
-        Ok(Detection::Waiting)
     }
 
     fn diagnostics(&self, reason: SettleReason, elapsed_millis: u64) -> QuiescenceDiagnostics {
@@ -194,11 +189,13 @@ pub struct QuiescenceResult {
     pub diagnostics: QuiescenceDiagnostics,
 }
 
-/// Samples a fresh post-Decision visual history until it becomes recurrent/stable or times out.
-/// `sample_every_millis` is the minimum start-to-start interval between samples. Capture time counts
-/// toward that interval instead of being followed by an unconditional additional sleep.
-pub async fn settle_until_quiescent<M, C>(
-    policy: QuiescencePolicy,
+/// Samples a fresh post-Decision visual history until the configured step boundary is reached.
+///
+/// A visually stable/recurrent regime may be detected before `min_wait_millis`, but it is never
+/// exposed as the next Observation before that minimum horizon. `timeout_millis` is the global
+/// safety bound for the step, not a property of the settle detector itself.
+pub async fn wait_for_step_boundary<M, C>(
+    policy: StepBoundaryPolicy,
     metric: M,
     mut capture: C,
 ) -> anyhow::Result<QuiescenceResult>
@@ -206,25 +203,33 @@ where
     M: FrameDifferenceMetric,
     C: FnMut() -> anyhow::Result<Frame>,
 {
-    let sample_every = Duration::from_millis(policy.sample_every_millis);
+    policy.validate()?;
+    let sample_every = Duration::from_millis(policy.settle.sample_every_millis);
     let started = Instant::now();
-    let mut detector = QuiescenceDetector::new(policy, metric)?;
+    let mut detector = QuiescenceDetector::new(policy.settle.clone(), metric)?;
 
     loop {
         let sample_started = Instant::now();
         let frame = capture()?;
         let elapsed_millis = started.elapsed().as_millis() as u64;
+        let detection = detector.push(frame.clone(), elapsed_millis)?;
 
-        match detector.push(frame.clone(), elapsed_millis)? {
-            Detection::Waiting => {
-                let remaining = sample_every.saturating_sub(sample_started.elapsed());
-                if !remaining.is_zero() {
-                    tokio::time::sleep(remaining).await;
-                }
-            }
-            Detection::Settled(diagnostics) => {
+        if elapsed_millis >= policy.min_wait_millis {
+            if let Detection::Settled(diagnostics) = detection {
                 return Ok(QuiescenceResult { frame, diagnostics });
             }
+        }
+
+        if elapsed_millis >= policy.timeout_millis {
+            return Ok(QuiescenceResult {
+                frame,
+                diagnostics: detector.diagnostics(SettleReason::Timeout, elapsed_millis),
+            });
+        }
+
+        let remaining = sample_every.saturating_sub(sample_started.elapsed());
+        if !remaining.is_zero() {
+            tokio::time::sleep(remaining).await;
         }
     }
 }
@@ -254,7 +259,6 @@ mod tests {
         QuiescencePolicy {
             sample_every_millis: 50,
             stable_for_millis: 200,
-            max_wait_millis: 1_000,
             difference_threshold: 100,
             max_cycle_frames: 4,
         }
@@ -429,26 +433,47 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn timeout_is_reported() {
-        let mut detector =
-            QuiescenceDetector::new(policy(), BlockDifferenceMetric::default()).unwrap();
-        let a = frame();
-        detector.push(a.clone(), 0).unwrap();
+    #[tokio::test]
+    async fn step_boundary_does_not_finish_before_minimum_wait() {
+        let policy = StepBoundaryPolicy {
+            min_wait_millis: 10,
+            timeout_millis: 100,
+            settle: QuiescencePolicy {
+                sample_every_millis: 1,
+                stable_for_millis: 0,
+                difference_threshold: 0,
+                max_cycle_frames: 1,
+            },
+        };
 
-        let mut b = a;
-        for y in 0..4 {
-            for x in 0..4 {
-                fill_block(&mut b, x, y, 255);
-            }
-        }
+        let result =
+            wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
+                .await
+                .unwrap();
 
-        assert!(matches!(
-            detector.push(b, 1_000).unwrap(),
-            Detection::Settled(QuiescenceDiagnostics {
-                reason: SettleReason::Timeout,
-                ..
-            })
-        ));
+        assert_eq!(result.diagnostics.reason, SettleReason::Stable);
+        assert!(result.diagnostics.elapsed_millis >= 10);
+    }
+
+    #[tokio::test]
+    async fn step_timeout_is_reported_by_boundary_not_detector() {
+        let policy = StepBoundaryPolicy {
+            min_wait_millis: 0,
+            timeout_millis: 10,
+            settle: QuiescencePolicy {
+                sample_every_millis: 1,
+                stable_for_millis: 100,
+                difference_threshold: 0,
+                max_cycle_frames: 1,
+            },
+        };
+
+        let result =
+            wait_for_step_boundary(policy, BlockDifferenceMetric::default(), || Ok(frame()))
+                .await
+                .unwrap();
+
+        assert_eq!(result.diagnostics.reason, SettleReason::Timeout);
+        assert!(result.diagnostics.elapsed_millis >= 10);
     }
 }

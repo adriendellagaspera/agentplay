@@ -1,16 +1,16 @@
 pub mod quiescence;
 
-use agentplay_core::{Action, Agent, Decision, Environment, Observation, QuiescencePolicy};
-use quiescence::{FrameDifferenceMetric, QuiescenceResult, settle_until_quiescent};
+use agentplay_core::{Action, Agent, Decision, Environment, Observation, StepBoundaryPolicy};
+use quiescence::{FrameDifferenceMetric, QuiescenceResult, wait_for_step_boundary};
 use std::time::Duration;
 
-/// Applies every Action in a Decision before starting one fresh post-Decision settle attempt.
+/// Applies every Action in a Decision before starting one fresh post-Decision step-boundary wait.
 pub async fn step_decision<S, M, A, C>(
     state: &mut S,
     decision: &Decision,
     mut apply: A,
     mut capture: C,
-    policy: QuiescencePolicy,
+    policy: StepBoundaryPolicy,
     metric: M,
 ) -> anyhow::Result<QuiescenceResult>
 where
@@ -29,7 +29,7 @@ where
         }
     }
 
-    settle_until_quiescent(policy, metric, || capture(state)).await
+    wait_for_step_boundary(policy, metric, || capture(state)).await
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,7 +80,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentplay_core::{Frame, Key, Step};
+    use agentplay_core::{Frame, Key, QuiescencePolicy, Step};
     use async_trait::async_trait;
     use std::sync::{Arc, Mutex};
 
@@ -95,13 +95,16 @@ mod tests {
         }
     }
 
-    fn settle_policy() -> QuiescencePolicy {
-        QuiescencePolicy {
-            sample_every_millis: 1,
-            stable_for_millis: 0,
-            max_wait_millis: 20,
-            difference_threshold: 0,
-            max_cycle_frames: 1,
+    fn settle_policy() -> StepBoundaryPolicy {
+        StepBoundaryPolicy {
+            min_wait_millis: 0,
+            timeout_millis: 20,
+            settle: QuiescencePolicy {
+                sample_every_millis: 1,
+                stable_for_millis: 0,
+                difference_threshold: 0,
+                max_cycle_frames: 1,
+            },
         }
     }
 
