@@ -55,7 +55,11 @@ jobs:
           [[ -n "$MATCH" ]] || { echo 'TextEdit window not discovered' >&2; exit 1; }
           WINDOW_ID="$(printf '%s\n' "$MATCH" | sed -E 's/^window=([0-9]+).*/\1/')"
 
-          $PROBE burst "$WINDOW_ID" "$PID" com.apple.TextEdit 8
+          BURST="$($PROBE burst "$WINDOW_ID" "$PID" com.apple.TextEdit 8)"
+          printf '%s\n' "$BURST"
+          BURST_MS="$(printf '%s\n' "$BURST" | sed -E 's/.* in ([0-9]+) ms.*/\1/')"
+          [[ "$BURST_MS" =~ ^[0-9]+$ ]] || { echo 'could not parse capture burst duration' >&2; exit 1; }
+          (( BURST_MS < 2000 )) || { echo "persistent capture is too slow: ${BURST_MS} ms for 8 frames" >&2; exit 1; }
 
           $PROBE capture "$WINDOW_ID" "$PID" com.apple.TextEdit
           mv frame.rgba before.rgba
